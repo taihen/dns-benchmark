@@ -1,0 +1,9 @@
+# Binaries
+/bin/
+
+# Dependency directories (remove the "/" to include it in Git)
+/vendor/
+Gopkg.lock
+
+# Test binary, built with "go test -c"
+*.test
