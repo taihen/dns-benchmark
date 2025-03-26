@@ -1,5 +1,6 @@
 # Binaries
 /bin/
+dnsbenchmark
 
 # Dependency directories (remove the "/" to include it in Git)
 /vendor/

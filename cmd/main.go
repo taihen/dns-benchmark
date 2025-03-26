@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"dns-benchmark/pkg/dnsquery"
+	"github.com/miekg/dns" // Add import for dns constants like dns.TypeA
 )
 
 func main() {
@@ -14,10 +15,21 @@ func main() {
 	}
 
 	dnsServer := os.Args[1]
-	queryDomain := os.Args[2] // Capture the domain from command line
+	queryDomain := os.Args[2]
+
+	fmt.Printf("Checking server responsiveness (%s)...\n", dnsServer)
+	_, initialResultStr, initialRcode, _ := dnsquery.PerformDNSQuery(dnsServer, queryDomain, dns.TypeA)
+
+	if initialRcode == -1 {
+		fmt.Printf("Error: DNS server %s is not responding or unreachable.\n", dnsServer)
+		fmt.Printf("Details: %s\n", initialResultStr)
+		os.Exit(1)
+	}
+	fmt.Println("Server responded. Proceeding with benchmark...")
+
 	results, err := dnsquery.PerformQueries(dnsServer, queryDomain)
 	if err != nil {
-		fmt.Printf("Failed to perform queries: %v\n", err)
+		fmt.Printf("Error during benchmark: %v\n", err)
 		os.Exit(1)
 	}
 
