@@ -11,9 +11,11 @@ import (
 type queryResult struct {
 	QueryType uint16
 	Duration  time.Duration
+	Result    string
+	Rcode     int
 }
 
-func PerformQueries(dnsServer string, queryDomain string) (map[uint16]time.Duration, error) {
+func PerformQueries(dnsServer string, queryDomain string) (map[uint16]queryResult, error) {
 	queryTypes := []uint16{
 		dns.TypeA,
 		dns.TypeAAAA,
@@ -22,49 +24,78 @@ func PerformQueries(dnsServer string, queryDomain string) (map[uint16]time.Durat
 		dns.TypeTXT,
 		dns.TypeNS,
 	}
-	results := make(map[uint16]time.Duration)
+	results := make(map[uint16]queryResult)
 
 	for _, qType := range queryTypes {
-		duration, err := performDNSQuery(dnsServer, queryDomain, qType)
-		if err != nil {
-			return nil, err
+		duration, resultStr, rcode, _ := PerformDNSQuery(dnsServer, queryDomain, qType)
+
+		results[qType] = queryResult{
+			QueryType: qType,
+			Duration:  duration,
+			Result:    resultStr,
+			Rcode:     rcode,
 		}
-		results[qType] = duration
+
 	}
 
 	return results, nil
 }
 
-func performDNSQuery(dnsServer string, queryDomain string, qType uint16) (time.Duration, error) {
+func PerformDNSQuery(dnsServer string, queryDomain string, qType uint16) (time.Duration, string, int, error) {
 	c := new(dns.Client)
+	c.Timeout = 2 * time.Second
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(queryDomain), qType)
 	startTime := time.Now()
-	_, _, err := c.Exchange(m, dnsServer+":53")
-	if err != nil {
-		return 0, err
-	}
+	r, _, err := c.Exchange(m, dnsServer+":53")
 	duration := time.Since(startTime)
-	return duration, nil
+
+	if err != nil {
+		return duration, fmt.Sprintf("Network Error: %v", err), -1, err
+	}
+
+	rcode := r.Rcode
+	resultStr := ""
+
+	if len(r.Answer) > 0 {
+		answers := make([]string, len(r.Answer))
+		for i, ans := range r.Answer {
+			answers[i] = ans.String()
+		}
+		resultStr = fmt.Sprintf("%v", answers)
+	} else {
+		resultStr = dns.RcodeToString[rcode]
+		if rcode == dns.RcodeSuccess {
+			resultStr = "NOERROR (empty answer)"
+		}
+	}
+
+	return duration, resultStr, rcode, nil
 }
 
-func PrintReport(results map[uint16]time.Duration, dnsServer string, queryDomain string) {
-	// Convert map to slice for sorting
+func PrintReport(results map[uint16]queryResult, dnsServer string, queryDomain string) {
 	var resultsSlice []queryResult
-	for qType, duration := range results {
-		resultsSlice = append(resultsSlice, queryResult{QueryType: qType, Duration: duration})
+	for _, qr := range results {
+		resultsSlice = append(resultsSlice, qr)
 	}
 
-	// Sort slice by duration
 	sort.Slice(resultsSlice, func(i, j int) bool {
 		return resultsSlice[i].Duration < resultsSlice[j].Duration
 	})
 
-	// Print sorted results with DNS server and domain information
 	fmt.Printf("# DNS Query Timing Report for %s (Domain: %s)\n", dnsServer, queryDomain)
-	fmt.Println("| Query Type | Time Taken |")
-	fmt.Println("|------------|------------|")
+	fmt.Println("| Query Type | Time Taken | RCODE   | Result                                     |")
+	fmt.Println("|------------|------------|---------|--------------------------------------------|")
 	for _, result := range resultsSlice {
-		fmt.Printf("| %s | %v |\n", dns.TypeToString[result.QueryType], result.Duration)
+		rcodeStr := "N/A"
+		if result.Rcode != -1 {
+			rcodeStr = dns.RcodeToString[result.Rcode]
+		}
+
+		resultStr := result.Result
+		if len(resultStr) > 40 {
+			resultStr = resultStr[:37] + "..."
+		}
+		fmt.Printf("| %-10s | %-10v | %-7s | %-42s |\n", dns.TypeToString[result.QueryType], result.Duration, rcodeStr, resultStr)
 	}
 }
