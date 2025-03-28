@@ -1,204 +1,475 @@
 package dnsquery
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/hex"
 	"fmt"
-	"sort"
-	"sync" // Added for WaitGroup
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
+	"github.com/taihen/dns-benchmark/pkg/analysis"
+	"github.com/taihen/dns-benchmark/pkg/config"
+	"golang.org/x/time/rate"
 )
 
-// Represents the result of a single DNS query
-type queryResult struct {
-	QueryType uint16
-	Duration  time.Duration
-	Result    string
-	Rcode     int
-	Error     error // Added to capture potential errors within a goroutine
+const (
+	dnssecCheckDomain         = "dnssec-ok.org."
+	nxdomainCheckDomainPrefix = "nxdomain-test-"
+	nxdomainCheckDomainSuffix = ".example.com."
+	rebindingCheckDomain      = "private.dns-rebinding-test.com." // Placeholder
+	dotcomCheckPrefix         = "dnsbench-dotcom-"
+	dotcomCheckSuffix         = ".com."
+	dohUserAgent              = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
+)
+
+// QueryResult holds the result of a single DNS query.
+type QueryResult struct {
+	Latency  time.Duration
+	Response *dns.Msg
+	Error    error
 }
 
-// Represents aggregated results for a specific query type after multiple parallel queries
-type aggregatedQueryResult struct {
-	QueryType     uint16
-	TotalDuration time.Duration
-	QueryCount    int
-	SuccessCount  int    // Number of successful queries (Rcode != -1 and no network error)
-	Rcode         int    // Rcode of the last received query for this type (for reporting)
-	Result        string // Result of the last received query for this type (for reporting)
+// --- Protocol Specific Query Functions ---
+
+// performQueryWithClient handles UDP, TCP, and DoT queries using miekg/dns client.
+func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(domain), qType)
+	msg.SetEdns0(4096, true) // Request DNSSEC
+
+	startTime := time.Now()
+	response, _, err := client.Exchange(msg, serverAddr)
+	latency := time.Since(startTime)
+
+	if err != nil {
+		// Simplify error checking
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return QueryResult{Error: fmt.Errorf("query timed out after %v", timeout)}
+		}
+		// Catch other potential network/TLS errors broadly
+		return QueryResult{Error: fmt.Errorf("query failed: %w", err)}
+	}
+	if response == nil {
+		return QueryResult{Error: fmt.Errorf("query succeeded but response was nil")}
+	}
+	return QueryResult{Latency: latency, Response: response, Error: nil}
 }
 
-func PerformQueries(dnsServer string, queryDomain string, numParallel int) (map[uint16]aggregatedQueryResult, error) {
-	queryTypes := []uint16{
-		dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeTXT, dns.TypeNS, // Standard order
+func performUDPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	client := &dns.Client{Net: "udp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
+	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+}
+
+func performTCPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	client := &dns.Client{Net: "tcp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
+	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+}
+
+func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	tlsConfig := &tls.Config{
+		ServerName: serverInfo.Hostname, // SNI
+		MinVersion: tls.VersionTLS12,
 	}
-	totalQueries := len(queryTypes) * numParallel
-	// Revert back to using a map of structs
-	aggregatedResults := make(map[uint16]aggregatedQueryResult)
-	resultsChan := make(chan queryResult, totalQueries) // Buffer for all results
-	var wg sync.WaitGroup      // For worker goroutines
-	// Removed aggWg and mapMutex
-	// Removed concurrencyLimiter
+	client := &dns.Client{
+		Net:       "tcp-tls",
+		TLSConfig: tlsConfig,
+		Timeout:   timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout,
+	}
+	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+}
 
+// performDoHQuery sends a query using DNS over HTTPS.
+func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(domain), qType)
+	msg.SetEdns0(4096, true)
 
-	// Initialize aggregated results map first with structs
-	for _, qType := range queryTypes {
-		aggregatedResults[qType] = aggregatedQueryResult{QueryType: qType}
+	packedMsg, err := msg.Pack()
+	if err != nil { return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)} }
+
+	httpClient := &http.Client{Timeout: timeout}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", serverInfo.Address, bytes.NewReader(packedMsg))
+	if err != nil { return QueryResult{Error: fmt.Errorf("failed to create DoH request: %w", err)} }
+
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+	req.Header.Set("User-Agent", dohUserAgent)
+
+	startTime := time.Now()
+	httpResp, err := httpClient.Do(req)
+	latency := time.Since(startTime)
+
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded { // Check context error for timeout
+			return QueryResult{Error: fmt.Errorf("doh query timed out after %v", timeout)}
+		}
+		return QueryResult{Error: fmt.Errorf("doh http request failed: %w", err)}
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		return QueryResult{Error: fmt.Errorf("doh query failed with status code %d", httpResp.StatusCode)}
 	}
 
-	wg.Add(totalQueries) // Add count for worker queries upfront
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil { return QueryResult{Error: fmt.Errorf("failed to read DoH response body: %w", err)} }
 
-	// Launch all worker goroutines, cycling through query types for better distribution
-	for i := 0; i < totalQueries; i++ {
-		// Removed semaphore acquisition
-		qType := queryTypes[i%len(queryTypes)] // Cycle through types
-		go func(qt uint16) { // Correct indentation
-			defer wg.Done()
-			// Removed semaphore release
-			// Use the main PerformDNSQuery which creates its own client
-			duration, resultStr, rcode, err := PerformDNSQuery(dnsServer, queryDomain, qt)
-			resultsChan <- queryResult{
-				QueryType: qt,
-				Duration:  duration,
-				Result:    resultStr,
-				Rcode:     rcode,
-				Error:     err,
-			}
-		}(qType)
-	} // End of the outer for loop launching goroutines
+	response := new(dns.Msg)
+	if err = response.Unpack(body); err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to unpack DoH response: %w", err)}
+	}
 
-	// Wait for all worker goroutines to finish *before* closing the channel
+	return QueryResult{Latency: latency, Response: response, Error: nil}
+}
+
+// performDoQQuery sends a query using DNS over QUIC.
+func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(domain), qType)
+	msg.SetEdns0(4096, true)
+
+	packedMsg, err := msg.Pack()
+	if err != nil { return QueryResult{Error: fmt.Errorf("failed to pack DoQ message: %w", err)} }
+
+	tlsConfig := &tls.Config{
+		NextProtos: []string{"doq"}, // ALPN for DoQ
+		ServerName: serverInfo.Hostname,
+		MinVersion: tls.VersionTLS12,
+	}
+
+	startTime := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Dial QUIC connection
+	session, err := quic.DialAddrEarly(ctx, serverInfo.Address, tlsConfig, nil)
+	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to dial %s: %w", serverInfo.Address, err)} }
+	defer session.CloseWithError(0, "")
+
+	// Open stream
+	stream, err := session.OpenStreamSync(ctx)
+	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)} }
+	// No need to defer stream.Close() here, closing write side is enough
+
+	// Write query with length prefix
+	lenPrefix := []byte{byte(len(packedMsg) >> 8), byte(len(packedMsg))}
+	if _, err = stream.Write(append(lenPrefix, packedMsg...)); err != nil {
+		return QueryResult{Error: fmt.Errorf("doq failed to write query: %w", err)}
+	}
+	stream.Close() // Close write side
+
+	// Read response length prefix
+	lenBuf := make([]byte, 2)
+	if _, err = io.ReadFull(stream, lenBuf); err != nil {
+		return QueryResult{Error: fmt.Errorf("doq failed to read length prefix: %w", err)}
+	}
+	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
+
+	// Read response body
+	respBuf := make([]byte, respLen)
+	if _, err = io.ReadFull(stream, respBuf); err != nil {
+		return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
+	}
+	latency := time.Since(startTime) // Measure after reading full response
+
+	response := new(dns.Msg)
+	if err = response.Unpack(respBuf); err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to unpack DoQ response: %w", err)}
+	}
+
+	return QueryResult{Latency: latency, Response: response, Error: nil}
+}
+
+// PerformQuery acts as a dispatcher based on protocol.
+func PerformQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	switch serverInfo.Protocol {
+	case config.UDP: return performUDPQuery(serverInfo, domain, qType, timeout)
+	case config.TCP: return performTCPQuery(serverInfo, domain, qType, timeout)
+	case config.DOT: return performDoTQuery(serverInfo, domain, qType, timeout)
+	case config.DOH: return performDoHQuery(serverInfo, domain, qType, timeout)
+	case config.DOQ: return performDoQQuery(serverInfo, domain, qType, timeout)
+	default: return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
+	}
+}
+
+// queryJob represents a single query task.
+type queryJob struct {
+	serverInfo config.ServerInfo
+	domain     string
+	qType      uint16
+	queryType  analysis.QueryType // For latency jobs
+	checkType  string             // For specific checks
+}
+
+// queryJobResult holds the result of a queryJob.
+type queryJobResult struct {
+	serverInfo config.ServerInfo
+	result     QueryResult
+	queryType  analysis.QueryType // For latency jobs
+	checkType  string             // For specific checks
+}
+
+// Benchmarker manages the benchmarking process.
+type Benchmarker struct {
+	Config  *config.Config
+	Results *analysis.BenchmarkResults
+	Limiter *rate.Limiter
+}
+
+// NewBenchmarker creates a new Benchmarker instance.
+func NewBenchmarker(cfg *config.Config) *Benchmarker {
+	limiter := rate.NewLimiter(rate.Limit(cfg.RateLimit), 1)
+	if cfg.RateLimit <= 0 { limiter = rate.NewLimiter(rate.Inf, 0) }
+	return &Benchmarker{
+		Config:  cfg,
+		Results: analysis.NewBenchmarkResults(),
+		Limiter: limiter,
+	}
+}
+
+// Run performs the benchmark against the configured servers.
+func (b *Benchmarker) Run() *analysis.BenchmarkResults {
+	servers := b.Config.Servers
+
+	// Initialize Results map using the unique string representation of ServerInfo
+	for _, server := range servers {
+		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String()}
+	}
+
+	// Run Latency Benchmark
+	b.runLatencyBenchmark(servers)
+
+	// Run Specific Checks Concurrently
+	b.runChecksConcurrently(servers)
+
+	return b.Results
+}
+
+// runLatencyBenchmark handles the cached/uncached latency tests.
+func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) { // Use ServerInfo
+	numUncached := 1
+	numCached := b.Config.NumQueries - numUncached
+	if numCached < 0 { numCached = 0; numUncached = b.Config.NumQueries }
+	if b.Config.NumQueries <= 0 { numCached = 0; numUncached = 0 }
+
+	totalLatencyJobsPerServer := numCached + numUncached
+	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer // Use len(servers)
+	if totalLatencyJobs == 0 { return } // Skip if no queries
+
+	jobs := make(chan queryJob, totalLatencyJobs)
+	resultsChan := make(chan queryJobResult, totalLatencyJobs)
+	var wg sync.WaitGroup
+
+	concurrency := b.Config.Concurrency
+	if concurrency <= 0 { concurrency = 1 }
+	if concurrency > totalLatencyJobs { concurrency = totalLatencyJobs }
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go b.queryWorker(&wg, jobs, resultsChan) // Use a general worker
+	}
+
+	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
+	if qType == 0 { qType = dns.TypeA }
+	cachedDomain := b.Config.Domain
+
+	for _, server := range servers {
+		serverKey := server.String()
+		serverResult := b.Results.Results[serverKey]
+		serverResult.TotalQueries = totalLatencyJobsPerServer
+		serverResult.CachedLatencies = make([]time.Duration, 0, numCached)
+		serverResult.UncachedLatencies = make([]time.Duration, 0, numUncached)
+
+		for i := 0; i < numCached; i++ {
+			jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
+		}
+		for i := 0; i < numUncached; i++ {
+			uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.") // Suffix doesn't strictly matter here
+			jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
+		}
+	}
+	close(jobs)
+
 	wg.Wait()
 	close(resultsChan)
 
-	// Collect and aggregate results *after* all workers are done (back to simpler model)
+	// Collect latency results
 	for res := range resultsChan {
-		// Get the struct (copy) from the map
-		aggRes := aggregatedResults[res.QueryType]
-		// Modify the copy
-		aggRes.QueryCount++
-		aggRes.TotalDuration += res.Duration
-		aggRes.Rcode = res.Rcode                 // Store last Rcode
-		aggRes.Result = res.Result               // Store last Result
-		if res.Rcode != -1 && res.Error == nil { // Consider Rcode and network error
-			aggRes.SuccessCount++
-		}
-		// Write the modified copy back to the map
-		aggregatedResults[res.QueryType] = aggRes
-	}
+		serverKey := res.serverInfo.String()
+		serverResult, ok := b.Results.Results[serverKey]
+		if !ok { continue }
 
-	return aggregatedResults, nil
+		if res.result.Error != nil {
+			serverResult.Errors++
+			if b.Config.Verbose {
+				fmt.Fprintf(os.Stderr, "Latency query error for %s (%s): %v\n", serverKey, res.queryType, res.result.Error)
+			}
+		} else {
+			switch res.queryType {
+			case analysis.Cached:
+				serverResult.CachedLatencies = append(serverResult.CachedLatencies, res.result.Latency)
+			case analysis.Uncached:
+				serverResult.UncachedLatencies = append(serverResult.UncachedLatencies, res.result.Latency)
+			}
+		}
+	}
 }
 
-// PerformDNSQuery creates a temporary client and performs a single DNS query.
-// Used for the initial responsiveness check.
-func PerformDNSQuery(dnsServer string, queryDomain string, qType uint16) (time.Duration, string, int, error) {
-	c := new(dns.Client)
-	c.Timeout = 2 * time.Second // Keep timeout for single check
-	return performDNSQueryInternal(c, dnsServer, queryDomain, qType)
+// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
+func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
+	var checkJobsList []queryJob
+
+	// Prepare check jobs
+	for _, server := range servers {
+		if b.Config.CheckDNSSEC {
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"})
+		}
+		if b.Config.CheckNXDOMAIN {
+			nxDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, nxdomainCheckDomainSuffix)
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: nxDomain, qType: dns.TypeA, checkType: "nxdomain"})
+		}
+		if b.Config.CheckRebinding {
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: rebindingCheckDomain, qType: dns.TypeA, checkType: "rebinding"})
+		}
+		if b.Config.AccuracyCheckFile != "" {
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: dns.TypeA, checkType: "accuracy"})
+		}
+		if b.Config.CheckDotcom {
+			dotcomDomain := generateUniqueDomain(dotcomCheckPrefix, dotcomCheckSuffix)
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dotcomDomain, qType: dns.TypeA, checkType: "dotcom"})
+		}
+	}
+
+	if len(checkJobsList) == 0 { return } // No checks enabled
+
+	jobs := make(chan queryJob, len(checkJobsList))
+	resultsChan := make(chan queryJobResult, len(checkJobsList))
+	var wg sync.WaitGroup
+
+	concurrency := b.Config.Concurrency
+	if concurrency <= 0 { concurrency = 1 }
+	if concurrency > len(checkJobsList) { concurrency = len(checkJobsList) } // Limit concurrency by number of actual jobs
+
+	// Start check workers
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go b.queryWorker(&wg, jobs, resultsChan) // Use general worker
+	}
+
+	// Distribute check jobs
+	for _, job := range checkJobsList {
+		jobs <- job
+	}
+	close(jobs)
+
+	wg.Wait()
+	close(resultsChan)
+
+	// Process check results
+	for res := range resultsChan {
+		serverKey := res.serverInfo.String()
+		serverResult, ok := b.Results.Results[serverKey]
+		if !ok { continue }
+
+		if res.result.Error != nil && b.Config.Verbose {
+			fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.Title(res.checkType), serverKey, res.result.Error)
+		}
+
+		// Update results based on check type
+		switch res.checkType {
+		case "dnssec":
+			supportsDNSSEC := checkADFlag(res.result)
+			serverResult.SupportsDNSSEC = &supportsDNSSEC
+		case "nxdomain":
+			hijacks := checkNXDOMAINHijack(res.result)
+			serverResult.HijacksNXDOMAIN = &hijacks
+		case "rebinding":
+			blocks := checkRebindingProtection(res.result)
+			serverResult.BlocksRebinding = &blocks
+		case "accuracy":
+			accurate := checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+			serverResult.IsAccurate = &accurate
+		case "dotcom":
+			if res.result.Error == nil {
+				latency := res.result.Latency
+				serverResult.DotcomLatency = &latency
+			}
+		}
+	}
 }
 
-// performDNSQueryInternal performs a single DNS query using a provided client.
-func performDNSQueryInternal(c *dns.Client, dnsServer string, queryDomain string, qType uint16) (time.Duration, string, int, error) {
-	m := new(dns.Msg)
-	// Remove duplicate SetQuestion call
-	m.SetQuestion(dns.Fqdn(queryDomain), qType)
-	startTime := time.Now()
-	r, _, err := c.Exchange(m, dnsServer+":53") // Use the provided client 'c'
-	endTime := time.Now() // Capture end time immediately
-	duration := endTime.Sub(startTime) // Calculate duration explicitly
 
-	if err != nil {
-		return duration, fmt.Sprintf("Network Error: %v", err), -1, err
-	}
-
-	rcode := r.Rcode
-	resultStr := ""
-
-	if len(r.Answer) > 0 {
-		answers := make([]string, len(r.Answer))
-		for i, ans := range r.Answer {
-			answers[i] = ans.String()
-		}
-		resultStr = fmt.Sprintf("%v", answers)
-	} else {
-		resultStr = dns.RcodeToString[rcode]
-		if rcode == dns.RcodeSuccess {
-			resultStr = "NOERROR (empty answer)"
+// queryWorker executes query jobs (used for both latency and checks).
+func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
+	defer wg.Done()
+	for job := range jobs {
+		_ = b.Limiter.Wait(context.Background()) // Apply rate limit
+		queryResult := PerformQuery(job.serverInfo, job.domain, job.qType, b.Config.Timeout)
+		// Pass back identifying info
+		results <- queryJobResult{
+			serverInfo: job.serverInfo,
+			result:     queryResult,
+			queryType:  job.queryType, // Will be zero value if it's a check job
+			checkType:  job.checkType,  // Will be empty if it's a latency job
 		}
 	}
-
-	// Return the actual error from c.Exchange
-	return duration, resultStr, rcode, err
 }
 
-func PrintReport(results map[uint16]aggregatedQueryResult, dnsServer string, queryDomain string, numParallel int, debugMode bool) {
-	var resultsSlice []aggregatedQueryResult
+// generateUniqueDomain creates a unique domain name.
+func generateUniqueDomain(prefix, suffix string) string {
+	randomBytes := make([]byte, 8)
+	_, err := rand.Read(randomBytes)
+	if err != nil { randomBytes = []byte(fmt.Sprintf("%d", time.Now().UnixNano())) } // Fallback
+	uniquePart := hex.EncodeToString(randomBytes)
+	return fmt.Sprintf("%s%s%s", prefix, uniquePart, suffix)
+}
 
-	// --- DEBUG START: Print raw aggregated data before sorting ---
-	if debugMode {
-	fmt.Println("\n--- Raw Aggregated Data (Before Sort) ---")
-	// Create a temporary slice just for ordered debug printing
-	debugSlice := make([]aggregatedQueryResult, 0, len(results))
-	for _, qr := range results {
-		debugSlice = append(debugSlice, qr)
+// --- Check Helper Functions ---
+
+func checkADFlag(result QueryResult) bool {
+	if result.Error != nil || result.Response == nil { return false }
+	return result.Response.AuthenticatedData
+}
+
+func checkNXDOMAINHijack(result QueryResult) bool {
+	if result.Error != nil || result.Response == nil { return false }
+	rcode := result.Response.Rcode
+	if rcode == dns.RcodeNameError { return false }
+	if rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 { return true }
+	return false
+}
+
+func checkRebindingProtection(result QueryResult) bool {
+	if result.Error != nil { return true }
+	if result.Response == nil { return true }
+	if result.Response.Rcode != dns.RcodeSuccess { return true }
+	if len(result.Response.Answer) == 0 { return true }
+	return false // Received NOERROR with answers
+}
+
+func checkResponseAccuracy(result QueryResult, expectedIP string) bool {
+	if result.Error != nil || result.Response == nil || result.Response.Rcode != dns.RcodeSuccess {
+		return false
 	}
-	// Sort debug slice by type for consistent output order
-	sort.Slice(debugSlice, func(i, j int) bool {
-		return debugSlice[i].QueryType < debugSlice[j].QueryType
-	})
-	for _, qr := range debugSlice {
-		fmt.Printf("Type: %-5s, Count: %2d, TotalDuration: %v\n", dns.TypeToString[qr.QueryType], qr.QueryCount, qr.TotalDuration)
+	for _, rr := range result.Response.Answer {
+		if aRecord, ok := rr.(*dns.A); ok {
+			if aRecord.A.String() == expectedIP {
+				return true
+			}
+		}
 	}
-	fmt.Println("-------------------------------------------")
-	}
-	// --- DEBUG END ---
-
-	// Populate the slice for actual report sorting
-	for _, qr := range results {
-		resultsSlice = append(resultsSlice, qr)
-	}
-
-
-	// Sort by average duration
-	sort.Slice(resultsSlice, func(i, j int) bool {
-		avgDurationI := time.Duration(0)
-		if resultsSlice[i].QueryCount > 0 {
-			avgDurationI = resultsSlice[i].TotalDuration / time.Duration(resultsSlice[i].QueryCount)
-		}
-		avgDurationJ := time.Duration(0)
-		if resultsSlice[j].QueryCount > 0 {
-			avgDurationJ = resultsSlice[j].TotalDuration / time.Duration(resultsSlice[j].QueryCount)
-		}
-		return avgDurationI < avgDurationJ
-	})
-
-	fmt.Printf("# DNS Query Timing Report for %s (Domain: %s) - %d Parallel Queries\n", dnsServer, queryDomain, numParallel)
-	fmt.Println("| Query Type | Avg Time   | Success | RCODE   | Last Result                                |")
-	fmt.Println("|------------|------------|---------|---------|--------------------------------------------|")
-	for _, result := range resultsSlice {
-		avgDuration := time.Duration(0)
-		if result.QueryCount > 0 {
-			avgDuration = result.TotalDuration / time.Duration(result.QueryCount)
-		}
-
-		rcodeStr := "N/A"
-		if result.Rcode != -1 { // Use the Rcode from the aggregated result
-			rcodeStr = dns.RcodeToString[result.Rcode]
-		}
-
-		resultStr := result.Result // Use the Result from the aggregated result
-		if len(resultStr) > 40 {
-			resultStr = resultStr[:37] + "..."
-		}
-
-		successRateStr := fmt.Sprintf("%d/%d", result.SuccessCount, result.QueryCount)
-
-		fmt.Printf("| %-10s | %-10v | %-7s | %-7s | %-42s |\n",
-			dns.TypeToString[result.QueryType],
-			avgDuration,
-			successRateStr,
-			rcodeStr,
-			resultStr)
-	}
+	return false
 }
