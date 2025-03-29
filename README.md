@@ -1,13 +1,11 @@
 # DNS Benchmark Tool
 
-## Overview
-
 This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
-> !Note
+> [!WARNING]
 > **Ethical Querying:** This tool implements safe querying practices (rate limiting, controlled concurrency) to avoid abusing public DNS services. Please use it responsively.
 
-## Features / Capabilities
+[!NOTE]
 
 - **Protocols Supported:**
   - UDP (default)
@@ -26,7 +24,7 @@ This command-line tool benchmarks the performance and features of DNS resolvers.
   - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false).
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
 - **Configuration:**
-  - Use built-in list of common public resolvers (Cloudflare, Google, Quad9).
+  - Use built-in list of common public resolvers (Cloudflare, Google, Quad9, Adguard).
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
   - Adjust number of queries (`-n`, default: 4), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
@@ -48,6 +46,9 @@ This will create an executable named `dns-benchmark` in the current directory.
 ## Usage
 
 ```bash
+# Print usage help
+./dns-benchmark -h
+
 # Run with defaults (UDP, default servers, system DNS)
 ./dns-benchmark
 
@@ -67,7 +68,7 @@ This will create an executable named `dns-benchmark` in the current directory.
 ./dns-benchmark -h
 ```
 
-## Notes
+[!IMPORTANT]
 
 - DoH requests include a `User-Agent` header: `dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)`
 - Accuracy check requires a file where each line contains a domain and its expected IP, separated by whitespace. The tool uses the first valid entry found.
