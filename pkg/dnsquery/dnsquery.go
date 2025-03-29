@@ -26,7 +26,7 @@ const (
 	dnssecCheckDomain         = "dnssec-ok.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
 	nxdomainCheckDomainSuffix = ".example.com."
-	rebindingCheckDomain      = "private.dns-rebinding-test.com." // Placeholder
+	rebindingCheckDomain      = "private.dns-rebinding-test.com." // Placeholder - requires a real domain resolving to private IP
 	dotcomCheckPrefix         = "dnsbench-dotcom-"
 	dotcomCheckSuffix         = ".com."
 	dohUserAgent              = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
@@ -52,11 +52,9 @@ func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType
 	latency := time.Since(startTime)
 
 	if err != nil {
-		// Simplify error checking
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			return QueryResult{Error: fmt.Errorf("query timed out after %v", timeout)}
 		}
-		// Catch other potential network/TLS errors broadly
 		return QueryResult{Error: fmt.Errorf("query failed: %w", err)}
 	}
 	if response == nil {
@@ -113,7 +111,7 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	latency := time.Since(startTime)
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded { // Check context error for timeout
+		if ctx.Err() == context.DeadlineExceeded {
 			return QueryResult{Error: fmt.Errorf("doh query timed out after %v", timeout)}
 		}
 		return QueryResult{Error: fmt.Errorf("doh http request failed: %w", err)}
@@ -155,6 +153,7 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	defer cancel()
 
 	// Dial QUIC connection
+	// TODO: Consider reusing QUIC sessions for multiple queries to the same server if performance is critical.
 	session, err := quic.DialAddrEarly(ctx, serverInfo.Address, tlsConfig, nil)
 	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to dial %s: %w", serverInfo.Address, err)} }
 	defer session.CloseWithError(0, "")
@@ -162,11 +161,11 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	// Open stream
 	stream, err := session.OpenStreamSync(ctx)
 	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)} }
-	// No need to defer stream.Close() here, closing write side is enough
 
 	// Write query with length prefix
 	lenPrefix := []byte{byte(len(packedMsg) >> 8), byte(len(packedMsg))}
 	if _, err = stream.Write(append(lenPrefix, packedMsg...)); err != nil {
+		stream.CancelRead(0) // Cancel reading if write fails
 		return QueryResult{Error: fmt.Errorf("doq failed to write query: %w", err)}
 	}
 	stream.Close() // Close write side
@@ -179,11 +178,12 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 
 	// Read response body
+	// TODO: Add protection against excessively large response lengths?
 	respBuf := make([]byte, respLen)
 	if _, err = io.ReadFull(stream, respBuf); err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
 	}
-	latency := time.Since(startTime) // Measure after reading full response
+	latency := time.Since(startTime)
 
 	response := new(dns.Msg)
 	if err = response.Unpack(respBuf); err != nil {
@@ -244,7 +244,7 @@ func NewBenchmarker(cfg *config.Config) *Benchmarker {
 func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	servers := b.Config.Servers
 
-	// Initialize Results map using the unique string representation of ServerInfo
+	// Initialize Results map
 	for _, server := range servers {
 		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String()}
 	}
@@ -259,15 +259,19 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 }
 
 // runLatencyBenchmark handles the cached/uncached latency tests.
-func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) { // Use ServerInfo
-	numUncached := 1
-	numCached := b.Config.NumQueries - numUncached
-	if numCached < 0 { numCached = 0; numUncached = b.Config.NumQueries }
-	if b.Config.NumQueries <= 0 { numCached = 0; numUncached = 0 }
+func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
+	// Determine number of cached vs uncached queries
+	var numCached, numUncached int
+	totalQueries := b.Config.NumQueries
+	if totalQueries < 1 { numCached, numUncached = 0, 0
+	} else if totalQueries == 1 { numCached, numUncached = 0, 1
+	} else if totalQueries == 2 { numCached, numUncached = 1, 1
+	} else if totalQueries == 3 { numCached, numUncached = 1, 2
+	} else { numCached, numUncached = totalQueries / 2, totalQueries - (totalQueries / 2) }
 
 	totalLatencyJobsPerServer := numCached + numUncached
-	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer // Use len(servers)
-	if totalLatencyJobs == 0 { return } // Skip if no queries
+	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer
+	if totalLatencyJobs == 0 { return }
 
 	jobs := make(chan queryJob, totalLatencyJobs)
 	resultsChan := make(chan queryJobResult, totalLatencyJobs)
@@ -279,7 +283,7 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) { // Use 
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go b.queryWorker(&wg, jobs, resultsChan) // Use a general worker
+		go b.queryWorker(&wg, jobs, resultsChan)
 	}
 
 	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
@@ -297,7 +301,7 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) { // Use 
 			jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
 		}
 		for i := 0; i < numUncached; i++ {
-			uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.") // Suffix doesn't strictly matter here
+			uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.")
 			jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
 		}
 	}
@@ -361,12 +365,12 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 
 	concurrency := b.Config.Concurrency
 	if concurrency <= 0 { concurrency = 1 }
-	if concurrency > len(checkJobsList) { concurrency = len(checkJobsList) } // Limit concurrency by number of actual jobs
+	if concurrency > len(checkJobsList) { concurrency = len(checkJobsList) }
 
 	// Start check workers
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go b.queryWorker(&wg, jobs, resultsChan) // Use general worker
+		go b.queryWorker(&wg, jobs, resultsChan)
 	}
 
 	// Distribute check jobs
@@ -410,7 +414,6 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 		}
 	}
 }
-
 
 // queryWorker executes query jobs (used for both latency and checks).
 func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
@@ -464,12 +467,14 @@ func checkResponseAccuracy(result QueryResult, expectedIP string) bool {
 	if result.Error != nil || result.Response == nil || result.Response.Rcode != dns.RcodeSuccess {
 		return false
 	}
+	// TODO: Handle multiple expected IPs if accuracy file format allows it.
 	for _, rr := range result.Response.Answer {
 		if aRecord, ok := rr.(*dns.A); ok {
 			if aRecord.A.String() == expectedIP {
 				return true
 			}
 		}
+		// TODO: Add check for AAAA records if needed/specified.
 	}
 	return false
 }

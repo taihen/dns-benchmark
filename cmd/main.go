@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	// Internal packages structured according to standard Go project layout
 	"github.com/taihen/dns-benchmark/pkg/analysis"
 	"github.com/taihen/dns-benchmark/pkg/config"
 	"github.com/taihen/dns-benchmark/pkg/dnsquery"
@@ -15,8 +16,8 @@ func main() {
 	// Explicitly use a type from the analysis package to satisfy the compiler
 	_ = analysis.BenchmarkResults{}
 
-	// Load configuration from flags and environment
-	cfg := config.LoadConfig() // Handles verbose output internally now
+	// Load configuration from flags, environment, and potentially config files
+	cfg := config.LoadConfig()
 
 	// Create and run the benchmarker
 	fmt.Println("Running benchmark...")
@@ -25,11 +26,11 @@ func main() {
 	fmt.Println("Benchmark finished.")
 	fmt.Println("---")
 
-	// Analyze the results (calculate metrics)
+	// Analyze the results (calculate derived metrics like averages, stddev, reliability)
 	results.Analyze()
 
-	// Determine output writer (stdout or file)
-	outputWriter := os.Stdout // Default to stdout
+	// Determine output writer (defaults to standard output)
+	outputWriter := os.Stdout
 	var err error
 	if cfg.OutputFile != "" {
 		outputWriter, err = os.Create(cfg.OutputFile)
@@ -38,7 +39,6 @@ func main() {
 			os.Exit(1)
 		}
 		defer outputWriter.Close()
-		// Print message only if actually writing to file
 		fmt.Printf("Writing results to %s...\n", cfg.OutputFile)
 	}
 
@@ -52,20 +52,21 @@ func main() {
 	case "json":
 		err = output.WriteJSONResults(outputWriter, results, cfg)
 	default:
-		fmt.Fprintf(os.Stderr, "Error: Unknown output format '%s'\n", cfg.OutputFormat)
+		fmt.Fprintf(os.Stderr, "Error: Unknown output format '%s'. Use 'console', 'csv', or 'json'.\n", cfg.OutputFormat)
 		os.Exit(1)
 	}
 
-	// Handle potential errors during CSV/JSON writing
+	// Handle potential errors during file writing for CSV/JSON
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s output: %v\n", format, err)
+		// Attempt to remove partially written file? Maybe not necessary.
 		os.Exit(1)
 	}
 
-	// Indicate completion if writing to a file
+	// Indicate completion only when writing to a file
 	if outputWriter != os.Stdout {
 		fmt.Println("Done.")
 	}
 
-	os.Exit(0)
+	os.Exit(0) // Exit successfully
 }

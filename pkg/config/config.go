@@ -75,16 +75,27 @@ type Config struct {
 
 // DefaultDNSStrings provides a list of common public DNS endpoints.
 var DefaultDNSStrings = []string{
+	// Cloudflare
 	"1.1.1.1",
 	"tls://1.1.1.1",
 	"https://cloudflare-dns.com/dns-query",
+	// Google
 	"8.8.8.8",
 	"tls://8.8.8.8",
 	"https://dns.google/dns-query",
+	// Quad9
 	"9.9.9.9",
 	"tls://9.9.9.9",
 	"https://dns.quad9.net/dns-query",
-	// "quic://dns.adguard-dns.com",
+	// OpenDNS
+	"208.67.222.222",
+	"tls://dns.opendns.com", // Uses hostname
+	"https://doh.opendns.com/dns-query",
+	// AdGuard DNS (Default)
+	"94.140.14.14",
+	"tls://dns.adguard-dns.com",
+	"https://dns.adguard-dns.com/dns-query",
+	"quic://dns.adguard-dns.com",
 }
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
@@ -93,15 +104,15 @@ func LoadConfig() *Config {
 
 	// Define flags
 	flag.StringVar(&cfg.ServersFile, "f", "", "Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)")
-	flag.IntVar(&cfg.NumQueries, "n", 3, "Number of latency queries per server (min 1 for cached/uncached split)")
+	flag.IntVar(&cfg.NumQueries, "n", 4, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
 	flag.IntVar(&cfg.Concurrency, "c", 4, "Max concurrent queries/checks")
 	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
 	flag.StringVar(&cfg.QueryType, "type", "A", "DNS record type for latency queries")
 	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for cached latency test")
-	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", true, "Check for DNSSEC support")
-	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", true, "Check for NXDOMAIN hijacking")
-	flag.BoolVar(&cfg.CheckRebinding, "rebinding", true, "Check for DNS rebinding protection")
+	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", false, "Check for DNSSEC support")
+	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
+	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
 	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Perform '.com' TLD lookup time check")
 	flag.StringVar(&cfg.AccuracyCheckFile, "accuracy-file", "", "Path to file for accuracy check (domain IP per line, uses first valid entry)")
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose output")
@@ -217,7 +228,6 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 		if err != nil { return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err) }
 		if u.Scheme != "https" { return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme '%s': must be https", serverStr) }
 		host := u.Hostname()
-		// DoH doesn't use SplitHostPort for the primary address, but we might need host for SNI implicitly
 		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
 	} else if strings.HasPrefix(serverStr, "tls://") {
 		addr := strings.TrimPrefix(serverStr, "tls://")
@@ -267,8 +277,9 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 
 // getSystemDNSServers attempts to read system DNS servers (returns IPs only for UDP).
 func getSystemDNSServers() ([]string, error) {
+	// TODO: Implement system DNS detection for Windows (e.g., using registry or PowerShell).
+	// TODO: Consider supporting non-UDP system resolvers if OS provides such info (e.g., DoH URL in some systems).
 	if runtime.GOOS == "windows" {
-		// TODO: Implement Windows DNS detection
 		return nil, fmt.Errorf("system DNS detection not implemented for Windows")
 	}
 	// Assumes /etc/resolv.conf for Unix-like systems
@@ -293,6 +304,7 @@ func getSystemDNSServers() ([]string, error) {
 
 // loadAccuracyCheckFile reads a file with 'domain IP' per line and returns the first valid pair.
 func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error) {
+	// TODO: Allow multiple domain/IP pairs for accuracy check? Currently uses first valid one.
 	file, err := os.Open(filePath)
 	if err != nil { return "", "", err }
 	defer file.Close()

@@ -24,10 +24,10 @@ func (qt QueryType) String() string {
 // ServerResult holds the benchmark results and calculated metrics for a single DNS server.
 type ServerResult struct {
 	ServerAddress     string          // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
-	CachedLatencies   []time.Duration // Latencies for likely cached queries
-	UncachedLatencies []time.Duration // Latencies for likely uncached queries
-	Errors            int             // Count of errors during latency queries
-	TotalQueries      int             // Total number of latency queries attempted (cached + uncached)
+	CachedLatencies   []time.Duration
+	UncachedLatencies []time.Duration
+	Errors            int // Count of errors during latency queries
+	TotalQueries      int // Total number of latency queries attempted
 
 	// Check Results (pointers allow nil state for unchecked/error)
 	SupportsDNSSEC    *bool
@@ -42,11 +42,14 @@ type ServerResult struct {
 	AvgUncachedLatency    time.Duration
 	StdDevUncachedLatency time.Duration
 	Reliability           float64 // Based on latency query success rate
+	// TODO: Add fields for min/max latency if desired.
+	// TODO: Consider separate error counts per check type (DNSSEC, NXDOMAIN etc.) for more granular reporting.
 }
 
 // BenchmarkResults holds the results for all tested servers.
 type BenchmarkResults struct {
 	Results map[string]*ServerResult // Map key is ServerResult.ServerAddress
+	// TODO: Add overall benchmark metadata (e.g., start/end time, total errors across all types).
 }
 
 // NewBenchmarkResults creates an initialized BenchmarkResults map.
@@ -119,4 +122,6 @@ func (br *BenchmarkResults) Analyze() {
 	for _, serverResult := range br.Results {
 		serverResult.CalculateMetrics()
 	}
+	// TODO: Add logic to sort results here instead of in output package?
+	// TODO: Implement comparative analysis (e.g., statistical significance tests).
 }
