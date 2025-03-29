@@ -24,16 +24,17 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
-        cache: false # Disable cache for CI builds if needed, or configure properly
+        cache: false
 
     - name: Tidy modules
       run: go mod tidy
+      # Removed go work sync
 
-    - name: Vendor dependencies # Ensure vendor dir is up-to-date for CI
+    - name: Vendor dependencies
       run: go mod vendor
 
     - name: Vet
-      run: go vet ./... # Vet doesn't need -mod=vendor usually
+      run: go vet -mod=vendor ./... # Use vendored modules
 
     - name: Build
       run: go build -v -mod=vendor ./... # Use vendored modules
@@ -67,6 +68,7 @@ jobs:
       - name: Tidy and Vendor # Ensure vendor dir is present for release build
         run: |
           go mod tidy
+          # Removed go work sync
           go mod vendor
 
       - name: Build Binary for ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -79,7 +81,7 @@ jobs:
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
           echo "Building for $GOOS/$GOARCH -> $OUTPUT_NAME"
-          # Use -mod=vendor for the release build as well
+          # Use -mod=vendor for the release build
           go build -o "$OUTPUT_NAME" -ldflags="-s -w" -mod=vendor ./cmd/main.go
           ls -lh "$OUTPUT_NAME"
 
