@@ -2,10 +2,10 @@ name: Go CI and Release
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ 'v*' ] # Trigger on version tags like v1.0, v1.2.3
+    branches: ["main"]
+    tags: ["v*"] # Trigger on version tags like v1.0, v1.2.3
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: write # Needed to create releases and upload assets
@@ -17,30 +17,20 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.24'
-        cache: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
 
-    - name: Tidy modules
-      run: go mod tidy
-      # Removed go work sync
+      - name: Build
+        run: go build -v ./...
 
-    - name: Vendor dependencies
-      run: go mod vendor
-
-    - name: Vet
-      run: go vet -mod=vendor ./... # Use vendored modules
-
-    - name: Build
-      run: go build -v -mod=vendor ./... # Use vendored modules
-
-    - name: Test
-      run: go test -v -mod=vendor ./... # Use vendored modules
+      - name: Test
+        run: go test -v ./...
 
   # Create release and upload cross-compiled binaries on tag pushes
   release:
@@ -63,13 +53,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: "1.24"
 
-      - name: Tidy and Vendor # Ensure vendor dir is present for release build
+      - name: Update Workspace
         run: |
-          go mod tidy
-          # Removed go work sync
-          go mod vendor
+          go work sync
 
       - name: Build Binary for ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
@@ -81,8 +69,7 @@ jobs:
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
           echo "Building for $GOOS/$GOARCH -> $OUTPUT_NAME"
-          # Use -mod=vendor for the release build
-          go build -o "$OUTPUT_NAME" -ldflags="-s -w" -mod=vendor ./cmd/main.go
+          go build -o "$OUTPUT_NAME" -ldflags="-s -w"  ./cmd/main.go
           ls -lh "$OUTPUT_NAME"
 
       - name: Upload Binaries to Release
