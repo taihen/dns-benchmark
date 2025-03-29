@@ -2,10 +2,10 @@ name: Go CI and Release
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ 'v*' ] # Trigger on version tags like v1.0, v1.2.3
+    branches: ["main"]
+    tags: ["v*"] # Trigger on version tags like v1.0, v1.2.3
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: write # Needed to create releases and upload assets
@@ -17,26 +17,27 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.24'
-        cache: false # Disable cache for CI builds if needed, or configure properly
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false # Disable cache for CI builds if needed, or configure properly
 
-    - name: Tidy modules
-      run: go mod tidy
+      # Temporary: Uncomment if you want to ensure dependencies are consistent
+      # - name: Tidy modules
+      #   run: go mod tidy
 
-    - name: Vet
-      run: go vet ./...
+      - name: Vet
+        run: go vet ./...
 
-    - name: Build
-      run: go build -v ./...
+      - name: Build
+        run: go build -v ./...
 
-    - name: Test
-      run: go test -v ./...
+      - name: Test
+        run: go test -v ./...
 
   # Create release and upload cross-compiled binaries on tag pushes
   release:
@@ -61,7 +62,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: "1.24"
 
       - name: Tidy modules # Ensure dependencies are consistent
         run: go mod tidy
