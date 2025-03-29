@@ -26,12 +26,11 @@ jobs:
           go-version: "1.24"
           cache: false # Disable cache for CI builds if needed, or configure properly
 
-      # Temporary: Uncomment if you want to ensure dependencies are consistent
-      # - name: Tidy modules
-      #   run: go mod tidy
+      - name: Tidy modules
+        run: go mod tidy
 
-      # - name: Vet
-      #  run: go vet ./...
+      - name: Vet
+        run: go vet ./...
 
       - name: Build
         run: go build -v ./...

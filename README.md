@@ -57,8 +57,8 @@ This will create an executable named `dns-benchmark` in the current directory.
 # Run with defaults, but enable .com check and output to JSON file
 ./dns-benchmark -dotcom -format json -o results.json
 
-# Run with defaults, disable DNSSEC check
-./dns-benchmark -dnssec=false
+# Run with defaults, enable DNSSEC, NXDomain Hijack and Rebinding checks
+./dns-benchmark -dnssec -rebinding -nxdomain
 
 # Run accuracy check using a file (e.g., accuracy.txt containing "mydomain.com 1.2.3.4")
 ./dns-benchmark -accuracy-file accuracy.txt
