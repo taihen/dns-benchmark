@@ -2,10 +2,10 @@ name: Go CI and Release
 
 on:
   push:
-    branches: ["main"]
-    tags: ["v*"] # Trigger on version tags like v1.0, v1.2.3
+    branches: [ "main" ]
+    tags: [ 'v*' ] # Trigger on version tags like v1.0, v1.2.3
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 permissions:
   contents: write # Needed to create releases and upload assets
@@ -17,42 +17,43 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: false # Disable cache for CI builds if needed, or configure properly
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: false # Disable cache for CI builds if needed, or configure properly
 
-      - name: Tidy modules
-        run: go mod tidy
+    - name: Tidy modules
+      run: go mod tidy
 
-      - name: Vet
-        run: go vet ./...
+    - name: Vendor dependencies # Ensure vendor dir is up-to-date for CI
+      run: go mod vendor
 
-      - name: Build
-        run: go build -v ./...
+    - name: Vet
+      run: go vet ./... # Vet doesn't need -mod=vendor usually
 
-      - name: Test
-        run: go test -v ./...
+    - name: Build
+      run: go build -v -mod=vendor ./... # Use vendored modules
+
+    - name: Test
+      run: go test -v -mod=vendor ./... # Use vendored modules
 
   # Create release and upload cross-compiled binaries on tag pushes
   release:
     # Run only when a version tag is pushed
     if: startsWith(github.ref, 'refs/tags/v')
-    # needs: build-and-test # Optional: only release if tests pass on main? Usually release runs independently on tag.
     runs-on: ubuntu-latest
     strategy:
       matrix:
         # Define target platforms
         goos: [linux, windows, darwin]
         goarch: [amd64, arm64]
-        exclude: # Exclude unsupported combinations if any (e.g., windows/arm64 might need specific setup)
+        exclude: # Exclude unsupported combinations if any
           - goos: windows
             goarch: arm64
-          # Add other exclusions if needed
 
     steps:
       - name: Checkout code
@@ -61,10 +62,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: '1.24'
 
-      - name: Tidy modules # Ensure dependencies are consistent
-        run: go mod tidy
+      - name: Tidy and Vendor # Ensure vendor dir is present for release build
+        run: |
+          go mod tidy
+          go mod vendor
 
       - name: Build Binary for ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
@@ -76,16 +79,13 @@ jobs:
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
           echo "Building for $GOOS/$GOARCH -> $OUTPUT_NAME"
-          go build -o "$OUTPUT_NAME" -ldflags="-s -w" ./cmd/main.go # -ldflags shrinks binary
-          ls -lh "$OUTPUT_NAME" # List file for verification
+          # Use -mod=vendor for the release build as well
+          go build -o "$OUTPUT_NAME" -ldflags="-s -w" -mod=vendor ./cmd/main.go
+          ls -lh "$OUTPUT_NAME"
 
       - name: Upload Binaries to Release
-        # This action creates a release if it doesn't exist,
-        # then uploads files matching the pattern.
-        # It runs for each matrix job, appending assets to the same release.
         uses: softprops/action-gh-release@v2
         with:
-          # Use wildcard to upload the binary built in this matrix job
           files: dns-benchmark-${{ matrix.goos }}-${{ matrix.goarch }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

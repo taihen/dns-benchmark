@@ -11,3 +11,6 @@ accuracy.*
 
 # Test binary, built with "go test -c"
 *.test
+
+# Vendored dependencies
+vendor/
