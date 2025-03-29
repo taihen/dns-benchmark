@@ -1,0 +1,5 @@
+# This file specifies the default owners for code review.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for all files in the repository
+* @taihen

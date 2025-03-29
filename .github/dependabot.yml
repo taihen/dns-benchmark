@@ -1,0 +1,13 @@
+# Basic Dependabot configuration for Go modules
+
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    reviewers:
+       - "taihen"
+    assignees:
+       - "taihen"
+    open-pull-requests-limit: 5
