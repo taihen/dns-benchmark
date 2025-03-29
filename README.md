@@ -5,7 +5,7 @@ This command-line tool benchmarks the performance and features of DNS resolvers.
 > [!WARNING]
 > **Ethical Querying:** This tool implements safe querying practices (rate limiting, controlled concurrency) to avoid abusing public DNS services. Please use it responsively.
 
-[!NOTE]
+## Features
 
 - **Protocols Supported:**
   - UDP (default)
@@ -17,7 +17,7 @@ This command-line tool benchmarks the performance and features of DNS resolvers.
   - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
   - **Uncached Latency:** Average and Standard Deviation for resolving unique, likely uncached domains.
   - **Reliability:** Percentage of successful latency queries.
-  - **.com Latency (Optional):** Latency for resolving a unique `.com` domain (`-dotcom` flag).
+  - **.com Latency:** Latency for resolving a unique `.com` domain (`-dotcom` flag).
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
@@ -68,7 +68,7 @@ This will create an executable named `dns-benchmark` in the current directory.
 ./dns-benchmark -h
 ```
 
-[!IMPORTANT]
+## Notes
 
 - DoH requests include a `User-Agent` header: `dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)`
 - Accuracy check requires a file where each line contains a domain and its expected IP, separated by whitespace. The tool uses the first valid entry found.
