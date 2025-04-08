@@ -1,5 +1,7 @@
 module github.com/taihen/dns-benchmark
 
+replace github.com/taihen/dns-benchmark => ../dns-benchmark
+
 go 1.24.1
 
 require (
