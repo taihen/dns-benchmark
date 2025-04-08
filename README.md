@@ -1,86 +1,77 @@
-# DNS Benchmark CLI Tool
+# DNS Benchmark Tool
 
-## Overview
+This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
-A DNS Benchmark CLI Tool utility written in Go that allows users to measure the response times of various DNS query types against a specified DNS server and domain.
+> [!WARNING]
+> **Ethical Querying:** This tool implements safe querying practices (rate limiting, controlled concurrency) to avoid abusing public DNS services. Please use it responsively.
 
 ## Features
 
-- Outputs a Markdown-formatted report including:
-  - Query timings.
-  - **DNS Response Code (RCODE):** Indicates the status of the query (e.g., NOERROR, NXDOMAIN, REFUSED, N/A for network errors).
-  - **Query Result:** Shows the actual DNS answer received or indicates errors/empty responses.
-- Simple CLI interface for ease of use.
+- **Protocols Supported:**
+  - UDP (default)
+  - TCP (`tcp://` prefix)
+  - DNS over TLS (DoT) (`tls://` prefix)
+  - DNS over HTTPS (DoH) (`https://` prefix)
+  - DNS over QUIC (DoQ) (`quic://` prefix)
+- **Metrics Measured:**
+  - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
+  - **Uncached Latency:** Average and Standard Deviation for resolving unique, likely uncached domains.
+  - **Reliability:** Percentage of successful latency queries.
+  - **.com Latency:** Latency for resolving a unique `.com` domain (`-dotcom` flag).
+- **Resolver Checks:**
+  - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
+  - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
+  - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false).
+  - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
+- **Configuration:**
+  - Use built-in list of common public resolvers (Cloudflare, Google, Quad9, Adguard).
+  - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
+  - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
+  - Adjust number of queries (`-n`, default: 4), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
+- **Output:**
+  - Formatted console table with results sorted by uncached latency.
+  - Console summary recommending the fastest reliable server and highlighting potential issues.
+  - CSV output (`-format csv`).
+  - JSON output (`-format json`).
+  - Option to write output to a file (`-o <filename>`).
 
-## Installation
-
-### Prerequisites
-
-- [Go](https://golang.org/doc/install) (**1.24** or later)
-
-### Setup
-
-Clone the repository and build the tool:
+## Building
 
 ```bash
-git clone https://github.com/taihen/dns-benchmark.git
-cd dns-benchmark
-go build -o dnsbenchmark ./cmd
+go build -o dns-benchmark ./cmd/main.go
 ```
+
+This will create an executable named `dns-benchmark` in the current directory.
 
 ## Usage
 
-To use the DNS Benchmark tool, you must specify the DNS server and the domain to query.
-
 ```bash
-./dnsbenchmark <dns-server> <query-domain>
+# Print usage help
+./dns-benchmark -h
+
+# Run with defaults (UDP, default servers, system DNS)
+./dns-benchmark
+
+# Run with custom server list file, 5 queries, 1s timeout
+./dns-benchmark -f my_servers.txt -n 5 -t 1s
+
+# Run with defaults, but enable .com check and output to JSON file
+./dns-benchmark -dotcom -format json -o results.json
+
+# Run with defaults, enable DNSSEC, NXDomain Hijack and Rebinding checks
+./dns-benchmark -dnssec -rebinding -nxdomain
+
+# Run accuracy check using a file (e.g., accuracy.txt containing "mydomain.com 1.2.3.4")
+./dns-benchmark -accuracy-file accuracy.txt
+
+# Get help
+./dns-benchmark -h
 ```
 
-### Options
+## Notes
 
-- `-p <parallel_queries>`: Specifies the number of queries to run in parallel for each query type. Defaults to `10`.
-
-  **Warning:** Setting this value too high (e.g., above 20) may result in rate limiting from public DNS servers, leading to errors or inaccurate results. Use with caution.
-
-- `-d`: Enable debug mode. If set, prints raw aggregated timing data before the final sorted report. Defaults to `false`.
-
-### Example
-
-```bash
-# Run with default 10 parallel queries
-./dnsbenchmark 8.8.8.8 example.com
-
-# Run with 5 parallel queries
-./dnsbenchmark -p 5 1.1.1.1 cloudflare.com
-
-# Run with debug output enabled
-./dnsbenchmark -d 8.8.8.8 google.com
-```
-
-This will first check if the specified DNS server is responsive. If it is, it performs the specified number of parallel DNS queries against the server for the domain and outputs the average timings, success rate, RCODE, and last result for each supported query type. If `-d` is used, raw aggregation data will be printed before the final report.
-
-## Output Format
-
-The output is formatted in Markdown as follows (example timings/results):
-
-```
-# DNS Query Timing Report for 1.1.1.1 (Domain: cloudflare.com) - 5 Parallel Queries
-| Query Type | Avg Time   | Success | RCODE   | Last Result                                |
-|------------|------------|---------|---------|--------------------------------------------|
-| A          | 15ms       | 5/5     | NOERROR | [cloudflare.com. 28 IN A 104.16.132.229]   |
-| NS         | 16ms       | 5/5     | NOERROR | [cloudflare.com. 21455 IN NS ns7.cloudf...|
-| AAAA       | 17ms       | 5/5     | NOERROR | [cloudflare.com. 211 IN AAAA 2606:4700::...|
-| CNAME      | 20ms       | 5/5     | NOERROR | NOERROR (empty answer)                     |
-| MX         | 22ms       | 5/5     | NOERROR | [cloudflare.com. 697 IN MX 20 mailstrea...|
-| TXT        | 25ms       | 5/5     | NOERROR | NOERROR (empty answer)                     |
-```
-
-_(Note: Example timings/results. Long results are truncated in the output table)_
-
-## Contributing
-
-Contributions to improve the DNS Benchmark CLI Tool are welcome.
-
-## License
-
-This project is not worth any license ;-)
+- DoH requests include a `User-Agent` header: `dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)`
+- Accuracy check requires a file where each line contains a domain and its expected IP, separated by whitespace. The tool uses the first valid entry found.
+- Rebinding check uses a placeholder domain (`private.dns-rebinding-test.com.`); replace this constant in the code if you have a specific test domain resolving to a private IP.
+- Results reflect network conditions at the time of the test. Run multiple times for a broader picture.
+- Please use responsibly and avoid excessive querying.
