@@ -1,6 +1,6 @@
 module github.com/taihen/dns-benchmark
 
-replace github.com/taihen/dns-benchmark => ../dns-benchmark
+replace github.com/taihen/dns-benchmark/pkg/output => ../dns-benchmark/pkg/output
 
 go 1.24.1
 
