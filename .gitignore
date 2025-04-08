@@ -1,10 +1,18 @@
 # Binaries
 /bin/
+dns-benchmark
 dnsbenchmark
+main
 
-# Dependency directories (remove the "/" to include it in Git)
-/vendor/
-Gopkg.lock
+# Local server list and output
+local/
 
 # Test binary, built with "go test -c"
 *.test
+
+# Vendored dependencies
+vendor/
+
+# Go workspace
+*.work
+*.work.sum
