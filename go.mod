@@ -3,7 +3,7 @@ module github.com/taihen/dns-benchmark
 go 1.24.1
 
 require (
-	github.com/miekg/dns v1.1.64
+	github.com/miekg/dns v1.1.65
 	github.com/quic-go/quic-go v0.50.1
 	golang.org/x/time v0.11.0
 )
