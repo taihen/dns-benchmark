@@ -29,7 +29,10 @@ jobs:
       - name: Verify local packages
         run: |
           echo "Package contents:"
-          ls -la pkg/output/
+          pwd
+          ls -la
+          ls -la pkg/
+          ls -al pkg/output/
           echo "Module path: $(go list -m)"
 
       - name: Install dependencies
