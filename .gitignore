@@ -5,9 +5,7 @@ dnsbenchmark
 main
 
 # Local server list and output
-output.*
-servers.*
-accuracy.*
+local/
 
 # Test binary, built with "go test -c"
 *.test
