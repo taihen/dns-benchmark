@@ -1,5 +1,9 @@
 # DNS Benchmark Tool
 
+[![Test](https://github.com/taihen/dns-benchmark/actions/workflows/test.yml/badge.svg)](https://github.com/taihen/dns-benchmark/actions/workflows/test.yml)
+[![Release](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml/badge.svg)](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/taihen/dns-benchmark)](https://goreportcard.com/report/github.com/taihen/dns-benchmark)
+
 This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
 > [!WARNING]
@@ -75,3 +79,7 @@ This will create an executable named `dns-benchmark` in the current directory.
 - Rebinding check uses a placeholder domain (`private.dns-rebinding-test.com.`); replace this constant in the code if you have a specific test domain resolving to a private IP.
 - Results reflect network conditions at the time of the test. Run multiple times for a broader picture.
 - Please use responsibly and avoid excessive querying.
+
+## License
+
+MIT
