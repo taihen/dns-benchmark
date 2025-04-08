@@ -1,8 +1,5 @@
 module github.com/taihen/dns-benchmark
 
-// Local development
-replace github.com/taihen/dns-benchmark/pkg/output => ./../../pkg/output
-
 go 1.24.1
 
 require (
