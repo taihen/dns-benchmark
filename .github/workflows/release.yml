@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main # Trigger on pushes to the main branch
+
+permissions:
+  contents: write # Needed to create releases and push tags
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history and tags for semantic-release
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build binaries
+        id: build
+        run: |
+          VERSION=$(git describe --tags --always)
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          mkdir -p dist
+          # Linux builds
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-linux-amd64 ./cmd
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-linux-arm64 ./cmd
+          # Darwin (macOS) builds
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-darwin-amd64 ./cmd
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-darwin-arm64 ./cmd
+          # Windows builds
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-windows-amd64.exe ./cmd
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-windows-arm64.exe ./cmd
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cd .. # Go back to the root directory
+
+      - name: Semantic Release
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Configuration is now handled by .releaserc.json

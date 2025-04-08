@@ -14,3 +14,7 @@ accuracy.*
 
 # Vendored dependencies
 vendor/
+
+# Go workspace
+*.work
+*.work.sum

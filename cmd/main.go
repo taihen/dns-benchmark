@@ -12,6 +12,8 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/output"
 )
 
+var version = "dev" // Will be overridden during build
+
 func main() {
 	// Explicitly use a type from the analysis package to satisfy the compiler
 	_ = analysis.BenchmarkResults{}
@@ -19,7 +21,14 @@ func main() {
 	// Load configuration from flags, environment, and potentially config files
 	cfg := config.LoadConfig()
 
+	// Display version if requested
+	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
+		fmt.Printf("dns-benchmark version %s\n", version)
+		os.Exit(0)
+	}
+
 	// Create and run the benchmarker
+	fmt.Printf("DNS Benchmark v%s\n", version)
 	fmt.Println("Running benchmark...")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
 	results := benchmarker.Run()
