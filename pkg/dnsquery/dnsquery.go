@@ -93,14 +93,18 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	msg.SetEdns0(4096, true)
 
 	packedMsg, err := msg.Pack()
-	if err != nil { return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)}
+	}
 
 	httpClient := &http.Client{Timeout: timeout}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", serverInfo.Address, bytes.NewReader(packedMsg))
-	if err != nil { return QueryResult{Error: fmt.Errorf("failed to create DoH request: %w", err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to create DoH request: %w", err)}
+	}
 
 	req.Header.Set("Content-Type", "application/dns-message")
 	req.Header.Set("Accept", "application/dns-message")
@@ -123,7 +127,9 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	}
 
 	body, err := io.ReadAll(httpResp.Body)
-	if err != nil { return QueryResult{Error: fmt.Errorf("failed to read DoH response body: %w", err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to read DoH response body: %w", err)}
+	}
 
 	response := new(dns.Msg)
 	if err = response.Unpack(body); err != nil {
@@ -140,7 +146,9 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	msg.SetEdns0(4096, true)
 
 	packedMsg, err := msg.Pack()
-	if err != nil { return QueryResult{Error: fmt.Errorf("failed to pack DoQ message: %w", err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("failed to pack DoQ message: %w", err)}
+	}
 
 	tlsConfig := &tls.Config{
 		NextProtos: []string{"doq"}, // ALPN for DoQ
@@ -155,12 +163,16 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	// Dial QUIC connection
 	// TODO: Consider reusing QUIC sessions for multiple queries to the same server if performance is critical.
 	session, err := quic.DialAddrEarly(ctx, serverInfo.Address, tlsConfig, nil)
-	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to dial %s: %w", serverInfo.Address, err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("doq failed to dial %s: %w", serverInfo.Address, err)}
+	}
 	defer session.CloseWithError(0, "")
 
 	// Open stream
 	stream, err := session.OpenStreamSync(ctx)
-	if err != nil { return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)} }
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)}
+	}
 
 	// Write query with length prefix
 	lenPrefix := []byte{byte(len(packedMsg) >> 8), byte(len(packedMsg))}
@@ -196,12 +208,18 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 // PerformQuery acts as a dispatcher based on protocol.
 func PerformQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	switch serverInfo.Protocol {
-	case config.UDP: return performUDPQuery(serverInfo, domain, qType, timeout)
-	case config.TCP: return performTCPQuery(serverInfo, domain, qType, timeout)
-	case config.DOT: return performDoTQuery(serverInfo, domain, qType, timeout)
-	case config.DOH: return performDoHQuery(serverInfo, domain, qType, timeout)
-	case config.DOQ: return performDoQQuery(serverInfo, domain, qType, timeout)
-	default: return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
+	case config.UDP:
+		return performUDPQuery(serverInfo, domain, qType, timeout)
+	case config.TCP:
+		return performTCPQuery(serverInfo, domain, qType, timeout)
+	case config.DOT:
+		return performDoTQuery(serverInfo, domain, qType, timeout)
+	case config.DOH:
+		return performDoHQuery(serverInfo, domain, qType, timeout)
+	case config.DOQ:
+		return performDoQQuery(serverInfo, domain, qType, timeout)
+	default:
+		return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
 	}
 }
 
@@ -232,7 +250,9 @@ type Benchmarker struct {
 // NewBenchmarker creates a new Benchmarker instance.
 func NewBenchmarker(cfg *config.Config) *Benchmarker {
 	limiter := rate.NewLimiter(rate.Limit(cfg.RateLimit), 1)
-	if cfg.RateLimit <= 0 { limiter = rate.NewLimiter(rate.Inf, 0) }
+	if cfg.RateLimit <= 0 {
+		limiter = rate.NewLimiter(rate.Inf, 0)
+	}
 	return &Benchmarker{
 		Config:  cfg,
 		Results: analysis.NewBenchmarkResults(),
@@ -263,23 +283,35 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 	// Determine number of cached vs uncached queries
 	var numCached, numUncached int
 	totalQueries := b.Config.NumQueries
-	if totalQueries < 1 { numCached, numUncached = 0, 0
-	} else if totalQueries == 1 { numCached, numUncached = 0, 1
-	} else if totalQueries == 2 { numCached, numUncached = 1, 1
-	} else if totalQueries == 3 { numCached, numUncached = 1, 2
-	} else { numCached, numUncached = totalQueries / 2, totalQueries - (totalQueries / 2) }
+	if totalQueries < 1 {
+		numCached, numUncached = 0, 0
+	} else if totalQueries == 1 {
+		numCached, numUncached = 0, 1
+	} else if totalQueries == 2 {
+		numCached, numUncached = 1, 1
+	} else if totalQueries == 3 {
+		numCached, numUncached = 1, 2
+	} else {
+		numCached, numUncached = totalQueries/2, totalQueries-(totalQueries/2)
+	}
 
 	totalLatencyJobsPerServer := numCached + numUncached
 	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer
-	if totalLatencyJobs == 0 { return }
+	if totalLatencyJobs == 0 {
+		return
+	}
 
 	jobs := make(chan queryJob, totalLatencyJobs)
 	resultsChan := make(chan queryJobResult, totalLatencyJobs)
 	var wg sync.WaitGroup
 
 	concurrency := b.Config.Concurrency
-	if concurrency <= 0 { concurrency = 1 }
-	if concurrency > totalLatencyJobs { concurrency = totalLatencyJobs }
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > totalLatencyJobs {
+		concurrency = totalLatencyJobs
+	}
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
@@ -287,7 +319,9 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 	}
 
 	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
-	if qType == 0 { qType = dns.TypeA }
+	if qType == 0 {
+		qType = dns.TypeA
+	}
 	cachedDomain := b.Config.Domain
 
 	for _, server := range servers {
@@ -314,7 +348,9 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 	for res := range resultsChan {
 		serverKey := res.serverInfo.String()
 		serverResult, ok := b.Results.Results[serverKey]
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 
 		if res.result.Error != nil {
 			serverResult.Errors++
@@ -357,15 +393,21 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 		}
 	}
 
-	if len(checkJobsList) == 0 { return } // No checks enabled
+	if len(checkJobsList) == 0 {
+		return
+	} // No checks enabled
 
 	jobs := make(chan queryJob, len(checkJobsList))
 	resultsChan := make(chan queryJobResult, len(checkJobsList))
 	var wg sync.WaitGroup
 
 	concurrency := b.Config.Concurrency
-	if concurrency <= 0 { concurrency = 1 }
-	if concurrency > len(checkJobsList) { concurrency = len(checkJobsList) }
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > len(checkJobsList) {
+		concurrency = len(checkJobsList)
+	}
 
 	// Start check workers
 	for i := 0; i < concurrency; i++ {
@@ -386,7 +428,9 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 	for res := range resultsChan {
 		serverKey := res.serverInfo.String()
 		serverResult, ok := b.Results.Results[serverKey]
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 
 		if res.result.Error != nil && b.Config.Verbose {
 			fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.Title(res.checkType), serverKey, res.result.Error)
@@ -426,7 +470,7 @@ func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, resu
 			serverInfo: job.serverInfo,
 			result:     queryResult,
 			queryType:  job.queryType, // Will be zero value if it's a check job
-			checkType:  job.checkType,  // Will be empty if it's a latency job
+			checkType:  job.checkType, // Will be empty if it's a latency job
 		}
 	}
 }
@@ -435,7 +479,9 @@ func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, resu
 func generateUniqueDomain(prefix, suffix string) string {
 	randomBytes := make([]byte, 8)
 	_, err := rand.Read(randomBytes)
-	if err != nil { randomBytes = []byte(fmt.Sprintf("%d", time.Now().UnixNano())) } // Fallback
+	if err != nil {
+		randomBytes = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
+	} // Fallback
 	uniquePart := hex.EncodeToString(randomBytes)
 	return fmt.Sprintf("%s%s%s", prefix, uniquePart, suffix)
 }
@@ -443,23 +489,39 @@ func generateUniqueDomain(prefix, suffix string) string {
 // --- Check Helper Functions ---
 
 func checkADFlag(result QueryResult) bool {
-	if result.Error != nil || result.Response == nil { return false }
+	if result.Error != nil || result.Response == nil {
+		return false
+	}
 	return result.Response.AuthenticatedData
 }
 
 func checkNXDOMAINHijack(result QueryResult) bool {
-	if result.Error != nil || result.Response == nil { return false }
+	if result.Error != nil || result.Response == nil {
+		return false
+	}
 	rcode := result.Response.Rcode
-	if rcode == dns.RcodeNameError { return false }
-	if rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 { return true }
+	if rcode == dns.RcodeNameError {
+		return false
+	}
+	if rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 {
+		return true
+	}
 	return false
 }
 
 func checkRebindingProtection(result QueryResult) bool {
-	if result.Error != nil { return true }
-	if result.Response == nil { return true }
-	if result.Response.Rcode != dns.RcodeSuccess { return true }
-	if len(result.Response.Answer) == 0 { return true }
+	if result.Error != nil {
+		return true
+	}
+	if result.Response == nil {
+		return true
+	}
+	if result.Response.Rcode != dns.RcodeSuccess {
+		return true
+	}
+	if len(result.Response.Answer) == 0 {
+		return true
+	}
 	return false // Received NOERROR with answers
 }
 

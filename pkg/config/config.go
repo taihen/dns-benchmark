@@ -26,7 +26,7 @@ const (
 
 // ServerInfo holds details about a DNS server endpoint.
 type ServerInfo struct {
-	Address  string       // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
+	Address  string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
 	Protocol ProtocolType
 	Hostname string // Hostname for TLS SNI / DoH URL host.
 	DoHPath  string // Path for DoH endpoint (e.g., /dns-query).
@@ -205,18 +205,26 @@ func printVerboseConfig(cfg *Config) {
 // readServerStringsFromFile reads server endpoints from a file.
 func readServerStringsFromFile(filePath string) ([]string, error) {
 	file, err := os.Open(filePath)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer file.Close()
 
 	var servers []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") { continue }
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 		servers = append(servers, line)
 	}
-	if err := scanner.Err(); err != nil { return nil, err }
-	if len(servers) == 0 { return nil, fmt.Errorf("no server endpoints found in file: %s", filePath) }
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no server endpoints found in file: %s", filePath)
+	}
 	return servers, nil
 }
 
@@ -225,32 +233,44 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 	serverStr = strings.TrimSpace(serverStr)
 	if strings.HasPrefix(serverStr, "https://") {
 		u, err := url.Parse(serverStr)
-		if err != nil { return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err) }
-		if u.Scheme != "https" { return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme '%s': must be https", serverStr) }
+		if err != nil {
+			return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err)
+		}
+		if u.Scheme != "https" {
+			return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme '%s': must be https", serverStr)
+		}
 		host := u.Hostname()
 		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
 	} else if strings.HasPrefix(serverStr, "tls://") {
 		addr := strings.TrimPrefix(serverStr, "tls://")
 		host, port, err := net.SplitHostPort(addr)
-		if err != nil { host, port = addr, "853" } // Default DoT port
+		if err != nil {
+			host, port = addr, "853"
+		} // Default DoT port
 		addr = net.JoinHostPort(host, port)
 		return ServerInfo{Address: addr, Protocol: DOT, Hostname: host}, nil
 	} else if strings.HasPrefix(serverStr, "quic://") {
 		addr := strings.TrimPrefix(serverStr, "quic://")
 		host, port, err := net.SplitHostPort(addr)
-		if err != nil { host, port = addr, "853" } // Default DoQ port
+		if err != nil {
+			host, port = addr, "853"
+		} // Default DoQ port
 		addr = net.JoinHostPort(host, port)
 		return ServerInfo{Address: addr, Protocol: DOQ, Hostname: host}, nil
 	} else if strings.HasPrefix(serverStr, "tcp://") {
 		addr := strings.TrimPrefix(serverStr, "tcp://")
 		host, port, err := net.SplitHostPort(addr)
-		if err != nil { host, port = addr, "53" } // Default DNS port
+		if err != nil {
+			host, port = addr, "53"
+		} // Default DNS port
 		addr = net.JoinHostPort(host, port)
 		return ServerInfo{Address: addr, Protocol: TCP, Hostname: host}, nil
 	} else { // Assume UDP
 		addr := serverStr
 		host, port, err := net.SplitHostPort(addr)
-		if err != nil { host, port = addr, "53" } // Default DNS port
+		if err != nil {
+			host, port = addr, "53"
+		} // Default DNS port
 		addr = net.JoinHostPort(host, port)
 		return ServerInfo{Address: addr, Protocol: UDP, Hostname: host}, nil
 	}
@@ -285,7 +305,9 @@ func getSystemDNSServers() ([]string, error) {
 	// Assumes /etc/resolv.conf for Unix-like systems
 	const resolvConfPath = "/etc/resolv.conf"
 	file, err := os.Open(resolvConfPath)
-	if err != nil { return nil, fmt.Errorf("could not open %s: %w", resolvConfPath, err) }
+	if err != nil {
+		return nil, fmt.Errorf("could not open %s: %w", resolvConfPath, err)
+	}
 	defer file.Close()
 
 	var servers []string
@@ -294,11 +316,17 @@ func getSystemDNSServers() ([]string, error) {
 		match := resolvConfNameserverRegex.FindStringSubmatch(scanner.Text())
 		if len(match) == 2 {
 			ip := net.ParseIP(match[1])
-			if ip != nil { servers = append(servers, match[1]) }
+			if ip != nil {
+				servers = append(servers, match[1])
+			}
 		}
 	}
-	if err := scanner.Err(); err != nil { return nil, fmt.Errorf("error reading %s: %w", resolvConfPath, err) }
-	if len(servers) == 0 { return nil, fmt.Errorf("no nameservers found in %s", resolvConfPath) }
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading %s: %w", resolvConfPath, err)
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no nameservers found in %s", resolvConfPath)
+	}
 	return servers, nil
 }
 
@@ -306,7 +334,9 @@ func getSystemDNSServers() ([]string, error) {
 func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error) {
 	// TODO: Allow multiple domain/IP pairs for accuracy check? Currently uses first valid one.
 	file, err := os.Open(filePath)
-	if err != nil { return "", "", err }
+	if err != nil {
+		return "", "", err
+	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
@@ -314,7 +344,9 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") { continue }
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 
 		parts := strings.Fields(line)
 		if len(parts) != 2 {
@@ -337,6 +369,8 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 		}
 		return domain, parsedIP.String(), nil // Return first valid pair
 	}
-	if err := scanner.Err(); err != nil { return "", "", err }
+	if err := scanner.Err(); err != nil {
+		return "", "", err
+	}
 	return "", "", fmt.Errorf("no valid 'domain IP' pairs found in %s", filePath)
 }
