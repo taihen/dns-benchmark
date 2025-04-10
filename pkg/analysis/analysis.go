@@ -23,18 +23,18 @@ func (qt QueryType) String() string {
 
 // ServerResult holds the benchmark results and calculated metrics for a single DNS server.
 type ServerResult struct {
-	ServerAddress     string          // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	ServerAddress     string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
 	CachedLatencies   []time.Duration
 	UncachedLatencies []time.Duration
 	Errors            int // Count of errors during latency queries
 	TotalQueries      int // Total number of latency queries attempted
 
 	// Check Results (pointers allow nil state for unchecked/error)
-	SupportsDNSSEC    *bool
-	HijacksNXDOMAIN   *bool
-	BlocksRebinding   *bool
-	IsAccurate        *bool
-	DotcomLatency     *time.Duration
+	SupportsDNSSEC  *bool
+	HijacksNXDOMAIN *bool
+	BlocksRebinding *bool
+	IsAccurate      *bool
+	DotcomLatency   *time.Duration
 
 	// Calculated Metrics
 	AvgCachedLatency      time.Duration
@@ -94,16 +94,22 @@ func (sr *ServerResult) CalculateMetrics() {
 
 // calculateAverage computes the average for a slice of durations.
 func calculateAverage(latencies []time.Duration) time.Duration {
-	if len(latencies) == 0 { return 0 }
+	if len(latencies) == 0 {
+		return 0
+	}
 	var totalLatency time.Duration
-	for _, l := range latencies { totalLatency += l }
+	for _, l := range latencies {
+		totalLatency += l
+	}
 	avgNano := float64(totalLatency.Nanoseconds()) / float64(len(latencies))
 	return time.Duration(math.Round(avgNano))
 }
 
 // calculateStdDev computes the standard deviation for a slice of durations.
 func calculateStdDev(latencies []time.Duration, average time.Duration) time.Duration {
-	if len(latencies) < 2 { return 0 } // StdDev requires at least 2 points
+	if len(latencies) < 2 {
+		return 0
+	} // StdDev requires at least 2 points
 
 	avgNano := float64(average.Nanoseconds())
 	var sumOfSquares float64

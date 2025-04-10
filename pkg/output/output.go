@@ -98,15 +98,23 @@ func sortServerResults(results []*analysis.ServerResult) {
 		resJ := results[j]
 		hasUncachedI := len(resI.UncachedLatencies) > 0
 		hasUncachedJ := len(resJ.UncachedLatencies) > 0
-		if hasUncachedI && !hasUncachedJ { return true }
-		if !hasUncachedI && hasUncachedJ { return false }
+		if hasUncachedI && !hasUncachedJ {
+			return true
+		}
+		if !hasUncachedI && hasUncachedJ {
+			return false
+		}
 		if hasUncachedI && hasUncachedJ && resI.AvgUncachedLatency != resJ.AvgUncachedLatency {
 			return resI.AvgUncachedLatency < resJ.AvgUncachedLatency
 		}
 		hasCachedI := len(resI.CachedLatencies) > 0
 		hasCachedJ := len(resJ.CachedLatencies) > 0
-		if hasCachedI && !hasCachedJ { return true }
-		if !hasCachedI && hasCachedJ { return false }
+		if hasCachedI && !hasCachedJ {
+			return true
+		}
+		if !hasCachedI && hasCachedJ {
+			return false
+		}
 		if hasCachedI && hasCachedJ && resI.AvgCachedLatency != resJ.AvgCachedLatency {
 			return resI.AvgCachedLatency < resJ.AvgCachedLatency
 		}
@@ -116,11 +124,21 @@ func sortServerResults(results []*analysis.ServerResult) {
 
 func buildHeader(cfg *config.Config) []string {
 	header := []string{"DNS Server", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Reliability"}
-	if cfg.CheckDotcom { header = append(header, ".com Latency") }
-	if cfg.CheckDNSSEC { header = append(header, "DNSSEC") }
-	if cfg.CheckNXDOMAIN { header = append(header, "NXDOMAIN Policy") }
-	if cfg.CheckRebinding { header = append(header, "Rebind Protect") }
-	if cfg.AccuracyCheckFile != "" { header = append(header, "Accuracy") }
+	if cfg.CheckDotcom {
+		header = append(header, ".com Latency")
+	}
+	if cfg.CheckDNSSEC {
+		header = append(header, "DNSSEC")
+	}
+	if cfg.CheckNXDOMAIN {
+		header = append(header, "NXDOMAIN Policy")
+	}
+	if cfg.CheckRebinding {
+		header = append(header, "Rebind Protect")
+	}
+	if cfg.AccuracyCheckFile != "" {
+		header = append(header, "Accuracy")
+	}
 	return header
 }
 
@@ -133,11 +151,21 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatStdDev(res.StdDevUncachedLatency, len(res.UncachedLatencies) > 1),
 		fmt.Sprintf("%.1f%%", res.Reliability),
 	}
-	if cfg.CheckDotcom { row = append(row, formatDurationPointer(res.DotcomLatency)) }
-	if cfg.CheckDNSSEC { row = append(row, formatBoolPointer(res.SupportsDNSSEC, "Yes", "No", "N/A")) }
-	if cfg.CheckNXDOMAIN { row = append(row, formatBoolPointer(res.HijacksNXDOMAIN, "Hijacks", "No Hijack", "N/A")) }
-	if cfg.CheckRebinding { row = append(row, formatBoolPointer(res.BlocksRebinding, "Blocks", "Allows", "N/A")) }
-	if cfg.AccuracyCheckFile != "" { row = append(row, formatBoolPointer(res.IsAccurate, "Accurate", "Mismatch", "N/A")) }
+	if cfg.CheckDotcom {
+		row = append(row, formatDurationPointer(res.DotcomLatency))
+	}
+	if cfg.CheckDNSSEC {
+		row = append(row, formatBoolPointer(res.SupportsDNSSEC, "Yes", "No", "N/A"))
+	}
+	if cfg.CheckNXDOMAIN {
+		row = append(row, formatBoolPointer(res.HijacksNXDOMAIN, "Hijacks", "No Hijack", "N/A"))
+	}
+	if cfg.CheckRebinding {
+		row = append(row, formatBoolPointer(res.BlocksRebinding, "Blocks", "Allows", "N/A"))
+	}
+	if cfg.AccuracyCheckFile != "" {
+		row = append(row, formatBoolPointer(res.IsAccurate, "Accurate", "Mismatch", "N/A"))
+	}
 	return row
 }
 
@@ -150,11 +178,21 @@ func buildCSVHeader(cfg *config.Config) []string {
 		"SuccessfulCachedQueries", "SuccessfulUncachedQueries",
 		"Errors", "TotalLatencyQueries",
 	}
-	if cfg.CheckDotcom { header = append(header, "DotcomLatency(ms)") }
-	if cfg.CheckDNSSEC { header = append(header, "SupportsDNSSEC") }
-	if cfg.CheckNXDOMAIN { header = append(header, "HijacksNXDOMAIN") }
-	if cfg.CheckRebinding { header = append(header, "BlocksRebinding") }
-	if cfg.AccuracyCheckFile != "" { header = append(header, "IsAccurate") }
+	if cfg.CheckDotcom {
+		header = append(header, "DotcomLatency(ms)")
+	}
+	if cfg.CheckDNSSEC {
+		header = append(header, "SupportsDNSSEC")
+	}
+	if cfg.CheckNXDOMAIN {
+		header = append(header, "HijacksNXDOMAIN")
+	}
+	if cfg.CheckRebinding {
+		header = append(header, "BlocksRebinding")
+	}
+	if cfg.AccuracyCheckFile != "" {
+		header = append(header, "IsAccurate")
+	}
 	return header
 }
 
@@ -171,45 +209,55 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		strconv.Itoa(res.Errors),
 		strconv.Itoa(res.TotalQueries),
 	}
-	if cfg.CheckDotcom { row = append(row, formatMillisFloatPointer(res.DotcomLatency)) }
-	if cfg.CheckDNSSEC { row = append(row, formatBoolPointerCSV(res.SupportsDNSSEC)) }
-	if cfg.CheckNXDOMAIN { row = append(row, formatBoolPointerCSV(res.HijacksNXDOMAIN)) }
-	if cfg.CheckRebinding { row = append(row, formatBoolPointerCSV(res.BlocksRebinding)) }
-	if cfg.AccuracyCheckFile != "" { row = append(row, formatBoolPointerCSV(res.IsAccurate)) }
+	if cfg.CheckDotcom {
+		row = append(row, formatMillisFloatPointer(res.DotcomLatency))
+	}
+	if cfg.CheckDNSSEC {
+		row = append(row, formatBoolPointerCSV(res.SupportsDNSSEC))
+	}
+	if cfg.CheckNXDOMAIN {
+		row = append(row, formatBoolPointerCSV(res.HijacksNXDOMAIN))
+	}
+	if cfg.CheckRebinding {
+		row = append(row, formatBoolPointerCSV(res.BlocksRebinding))
+	}
+	if cfg.AccuracyCheckFile != "" {
+		row = append(row, formatBoolPointerCSV(res.IsAccurate))
+	}
 	return row
 }
 
 // JSONServerResult defines the structure for JSON output.
 type JSONServerResult struct {
-	ServerAddress         string   `json:"serverAddress"`
-	AvgCachedLatencyMs    *float64 `json:"avgCachedLatencyMs,omitempty"`
-	StdDevCachedLatencyMs *float64 `json:"stdDevCachedLatencyMs,omitempty"`
-	AvgUncachedLatencyMs  *float64 `json:"avgUncachedLatencyMs,omitempty"`
-	StdDevUncachedLatencyMs *float64 `json:"stdDevUncachedLatencyMs,omitempty"`
-	DotcomLatencyMs       *float64 `json:"dotcomLatencyMs,omitempty"`
-	ReliabilityPct        float64  `json:"reliabilityPct"`
-	SuccessfulCachedQueries int      `json:"successfulCachedQueries"`
-	SuccessfulUncachedQueries int    `json:"successfulUncachedQueries"`
-	Errors                int      `json:"errors"`
-	TotalLatencyQueries   int      `json:"totalLatencyQueries"`
-	SupportsDNSSEC        *bool    `json:"supportsDnssec,omitempty"`
-	HijacksNXDOMAIN       *bool    `json:"hijacksNxdomain,omitempty"`
-	BlocksRebinding       *bool    `json:"blocksRebinding,omitempty"`
-	IsAccurate            *bool    `json:"isAccurate,omitempty"`
+	ServerAddress             string   `json:"serverAddress"`
+	AvgCachedLatencyMs        *float64 `json:"avgCachedLatencyMs,omitempty"`
+	StdDevCachedLatencyMs     *float64 `json:"stdDevCachedLatencyMs,omitempty"`
+	AvgUncachedLatencyMs      *float64 `json:"avgUncachedLatencyMs,omitempty"`
+	StdDevUncachedLatencyMs   *float64 `json:"stdDevUncachedLatencyMs,omitempty"`
+	DotcomLatencyMs           *float64 `json:"dotcomLatencyMs,omitempty"`
+	ReliabilityPct            float64  `json:"reliabilityPct"`
+	SuccessfulCachedQueries   int      `json:"successfulCachedQueries"`
+	SuccessfulUncachedQueries int      `json:"successfulUncachedQueries"`
+	Errors                    int      `json:"errors"`
+	TotalLatencyQueries       int      `json:"totalLatencyQueries"`
+	SupportsDNSSEC            *bool    `json:"supportsDnssec,omitempty"`
+	HijacksNXDOMAIN           *bool    `json:"hijacksNxdomain,omitempty"`
+	BlocksRebinding           *bool    `json:"blocksRebinding,omitempty"`
+	IsAccurate                *bool    `json:"isAccurate,omitempty"`
 }
 
 func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerResult {
 	jsonRes := JSONServerResult{
-		ServerAddress:         res.ServerAddress,
-		ReliabilityPct:        res.Reliability,
-		SuccessfulCachedQueries: len(res.CachedLatencies),
+		ServerAddress:             res.ServerAddress,
+		ReliabilityPct:            res.Reliability,
+		SuccessfulCachedQueries:   len(res.CachedLatencies),
 		SuccessfulUncachedQueries: len(res.UncachedLatencies),
-		Errors:                res.Errors,
-		TotalLatencyQueries:   res.TotalQueries,
-		SupportsDNSSEC:        res.SupportsDNSSEC,
-		HijacksNXDOMAIN:       res.HijacksNXDOMAIN,
-		BlocksRebinding:       res.BlocksRebinding,
-		IsAccurate:            res.IsAccurate,
+		Errors:                    res.Errors,
+		TotalLatencyQueries:       res.TotalQueries,
+		SupportsDNSSEC:            res.SupportsDNSSEC,
+		HijacksNXDOMAIN:           res.HijacksNXDOMAIN,
+		BlocksRebinding:           res.BlocksRebinding,
+		IsAccurate:                res.IsAccurate,
 	}
 	if len(res.CachedLatencies) > 0 {
 		avgMs := float64(res.AvgCachedLatency.Microseconds()) / 1000.0
@@ -236,7 +284,9 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 
 // printSummary adds a concluding recommendation based on the results.
 func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
-	if len(results) == 0 { return }
+	if len(results) == 0 {
+		return
+	}
 
 	fmt.Fprintln(writer, "\n--- Conclusion ---")
 
@@ -246,18 +296,24 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	// Find the best candidate (most reliable, then fastest uncached, then fastest cached, must be accurate)
 	for _, res := range results {
-		if res.Reliability < reliabilityThreshold { continue } // Skip unreliable
+		if res.Reliability < reliabilityThreshold {
+			continue
+		} // Skip unreliable
 
 		isAccurate := true // Assume accurate if check disabled or passed
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
 			isAccurate = false
 		}
-		if !isAccurate { continue } // Skip inaccurate
+		if !isAccurate {
+			continue
+		} // Skip inaccurate
 
 		// Compare with current best
 		if bestServer == nil {
 			bestServer = res // First reliable and accurate server
-			if len(res.UncachedLatencies) > 0 { lowestUncachedLatency = res.AvgUncachedLatency }
+			if len(res.UncachedLatencies) > 0 {
+				lowestUncachedLatency = res.AvgUncachedLatency
+			}
 			continue
 		}
 
@@ -299,7 +355,6 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 		}
 	}
 
-
 	// Report results
 	if bestServer != nil {
 		fmt.Fprintf(writer, "Fastest reliable server (based on uncached latency & accuracy): %s\n", bestServer.ServerAddress)
@@ -322,7 +377,9 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	issuesFound := false
 	for _, res := range results {
 		// Skip the best server if one was found
-		if bestServer != nil && res.ServerAddress == bestServer.ServerAddress { continue }
+		if bestServer != nil && res.ServerAddress == bestServer.ServerAddress {
+			continue
+		}
 
 		warningPrefix := fmt.Sprintf("Warning (%s):", res.ServerAddress)
 		serverIssues := false
@@ -342,7 +399,9 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 			fmt.Fprintf(writer, "%s Returned inaccurate results for %s.\n", warningPrefix, cfg.AccuracyCheckDomain)
 			serverIssues = true
 		}
-		if serverIssues { issuesFound = true }
+		if serverIssues {
+			issuesFound = true
+		}
 	}
 
 	if !issuesFound && bestServer != nil {
@@ -355,37 +414,53 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 // --- Formatting Helpers ---
 
 func formatLatency(latency time.Duration, hasSuccess bool) string {
-	if !hasSuccess || latency == 0 { return "N/A" }
+	if !hasSuccess || latency == 0 {
+		return "N/A"
+	}
 	return fmt.Sprintf("%.1f ms", float64(latency.Microseconds())/1000.0)
 }
 
 func formatStdDev(stdDev time.Duration, hasEnoughData bool) string {
-	if !hasEnoughData { return "N/A" }
+	if !hasEnoughData {
+		return "N/A"
+	}
 	return fmt.Sprintf("%.1f ms", float64(stdDev.Microseconds())/1000.0)
 }
 
 func formatDurationPointer(d *time.Duration) string {
-	if d == nil { return "N/A" }
+	if d == nil {
+		return "N/A"
+	}
 	return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000.0)
 }
 
 func formatBoolPointer(val *bool, trueStr, falseStr, nilStr string) string {
-	if val == nil { return nilStr }
-	if *val { return trueStr }
+	if val == nil {
+		return nilStr
+	}
+	if *val {
+		return trueStr
+	}
 	return falseStr
 }
 
 func formatMillisFloat(d time.Duration, applicable bool) string {
-	if !applicable || d == 0 { return "N/A" }
+	if !applicable || d == 0 {
+		return "N/A"
+	}
 	return fmt.Sprintf("%.3f", float64(d.Microseconds())/1000.0)
 }
 
 func formatMillisFloatPointer(d *time.Duration) string {
-	if d == nil { return "N/A" }
+	if d == nil {
+		return "N/A"
+	}
 	return fmt.Sprintf("%.3f", float64(d.Microseconds())/1000.0)
 }
 
 func formatBoolPointerCSV(val *bool) string {
-	if val == nil { return "N/A" }
+	if val == nil {
+		return "N/A"
+	}
 	return strconv.FormatBool(*val)
 }
