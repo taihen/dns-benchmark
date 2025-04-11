@@ -290,72 +290,9 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	fmt.Fprintln(writer, "\n--- Conclusion ---")
 
-	const reliabilityThreshold = 99.0
-	var bestServer *analysis.ServerResult
-	lowestUncachedLatency := time.Duration(math.MaxInt64)
+	bestServer := findBestServer(results, cfg)
 
-	// Find the best candidate (most reliable, then fastest uncached, then fastest cached, must be accurate)
-	for _, res := range results {
-		if res.Reliability < reliabilityThreshold {
-			continue
-		} // Skip unreliable
-
-		isAccurate := true // Assume accurate if check disabled or passed
-		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
-			isAccurate = false
-		}
-		if !isAccurate {
-			continue
-		} // Skip inaccurate
-
-		// Compare with current best
-		if bestServer == nil {
-			bestServer = res // First reliable and accurate server
-			if len(res.UncachedLatencies) > 0 {
-				lowestUncachedLatency = res.AvgUncachedLatency
-			}
-			continue
-		}
-
-		// Prioritize lower uncached latency
-		hasUncachedI := len(res.UncachedLatencies) > 0
-		hasUncachedBest := len(bestServer.UncachedLatencies) > 0
-
-		if hasUncachedI && !hasUncachedBest { // Current has uncached, best doesn't -> current is better
-			bestServer = res
-			lowestUncachedLatency = res.AvgUncachedLatency
-			continue
-		}
-		if !hasUncachedI && hasUncachedBest { // Current lacks uncached, best has it -> best is better
-			continue
-		}
-		if hasUncachedI && hasUncachedBest && res.AvgUncachedLatency < lowestUncachedLatency { // Both have uncached, current is faster
-			bestServer = res
-			lowestUncachedLatency = res.AvgUncachedLatency
-			continue
-		}
-		if hasUncachedI && hasUncachedBest && res.AvgUncachedLatency > lowestUncachedLatency { // Both have uncached, current is slower
-			continue
-		}
-
-		// If uncached latency is equal or N/A for both, compare cached latency
-		hasCachedI := len(res.CachedLatencies) > 0
-		hasCachedBest := len(bestServer.CachedLatencies) > 0
-
-		if hasCachedI && !hasCachedBest { // Current has cached, best doesn't -> current is better
-			bestServer = res
-			continue
-		}
-		if !hasCachedI && hasCachedBest { // Current lacks cached, best has it -> best is better
-			continue
-		}
-		if hasCachedI && hasCachedBest && res.AvgCachedLatency < bestServer.AvgCachedLatency { // Both have cached, current is faster
-			bestServer = res
-			continue
-		}
-	}
-
-	// Report results
+	// Report best server results
 	if bestServer != nil {
 		fmt.Fprintf(writer, "Fastest reliable server (based on uncached latency & accuracy): %s\n", bestServer.ServerAddress)
 		fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
@@ -374,6 +311,102 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	}
 
 	// Report warnings for other servers
+	printServerWarnings(writer, results, bestServer, cfg)
+
+	fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
+}
+
+// findBestServer identifies the best server based on reliability, accuracy, and latency.
+func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analysis.ServerResult {
+	const reliabilityThreshold = 99.0
+	var bestServer *analysis.ServerResult
+	lowestUncachedLatency := time.Duration(math.MaxInt64)
+
+	for _, res := range results {
+		// --- Filtering Criteria ---
+		if res.Reliability < reliabilityThreshold {
+			continue // Skip unreliable
+		}
+
+		isAccurate := true // Assume accurate if check disabled or passed
+		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
+			isAccurate = false
+		}
+		if !isAccurate {
+			continue // Skip inaccurate
+		}
+
+		// --- Comparison Logic ---
+		if bestServer == nil {
+			bestServer = res // First reliable and accurate server
+			if len(res.UncachedLatencies) > 0 {
+				lowestUncachedLatency = res.AvgUncachedLatency
+			}
+			continue
+		}
+
+		// Compare based on uncached latency first
+		if compareUncachedLatency(res, bestServer, lowestUncachedLatency) {
+			bestServer = res
+			if len(res.UncachedLatencies) > 0 { // Update lowest latency if current server has one
+				lowestUncachedLatency = res.AvgUncachedLatency
+			}
+			continue
+		}
+
+		// If uncached is equal or N/A, compare cached latency
+		if compareCachedLatency(res, bestServer) {
+			bestServer = res
+			// No need to update lowestUncachedLatency here
+			continue
+		}
+	}
+	return bestServer
+}
+
+// compareUncachedLatency returns true if 'current' is better than 'best' based on uncached latency.
+// It handles cases where one or both servers might lack uncached results.
+func compareUncachedLatency(current, best *analysis.ServerResult, currentLowestUncached time.Duration) bool {
+	hasUncachedCurrent := len(current.UncachedLatencies) > 0
+	hasUncachedBest := len(best.UncachedLatencies) > 0
+
+	if hasUncachedCurrent && !hasUncachedBest {
+		return true // Current has uncached, best doesn't -> current is better
+	}
+	if !hasUncachedCurrent && hasUncachedBest {
+		return false // Current lacks uncached, best has it -> best is better
+	}
+	if hasUncachedCurrent && hasUncachedBest {
+		// Both have uncached results, compare directly
+		return current.AvgUncachedLatency < currentLowestUncached
+	}
+	// Neither has uncached results, no change based on this criteria
+	return false
+}
+
+// compareCachedLatency returns true if 'current' is better than 'best' based on cached latency.
+// Assumes uncached latency comparison was inconclusive. Handles N/A cases.
+func compareCachedLatency(current, best *analysis.ServerResult) bool {
+	hasCachedCurrent := len(current.CachedLatencies) > 0
+	hasCachedBest := len(best.CachedLatencies) > 0
+
+	if hasCachedCurrent && !hasCachedBest {
+		return true // Current has cached, best doesn't -> current is better
+	}
+	if !hasCachedCurrent && hasCachedBest {
+		return false // Current lacks cached, best has it -> best is better
+	}
+	if hasCachedCurrent && hasCachedBest {
+		// Both have cached results, compare directly
+		return current.AvgCachedLatency < best.AvgCachedLatency
+	}
+	// Neither has cached results, no change based on this criteria
+	return false
+}
+
+// printServerWarnings iterates through servers and prints warnings for issues found.
+func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bestServer *analysis.ServerResult, cfg *config.Config) {
+	const reliabilityThreshold = 99.0
 	issuesFound := false
 	for _, res := range results {
 		// Skip the best server if one was found
@@ -407,8 +440,6 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	if !issuesFound && bestServer != nil {
 		fmt.Fprintln(writer, "Other tested servers performed reliably without major issues detected.")
 	}
-
-	fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
 }
 
 // --- Formatting Helpers ---
