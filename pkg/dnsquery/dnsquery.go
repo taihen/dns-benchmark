@@ -278,25 +278,32 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	return b.Results
 }
 
+// calculateLatencyQueryCounts determines the number of cached and uncached queries.
+func calculateLatencyQueryCounts(totalQueries int) (numCached, numUncached int) {
+	if totalQueries < 1 {
+		return 0, 0
+	}
+	if totalQueries == 1 {
+		return 0, 1
+	}
+	if totalQueries == 2 {
+		return 1, 1
+	}
+	if totalQueries == 3 {
+		return 1, 2
+	}
+	// For 4 or more, split roughly evenly, prioritizing uncached if odd.
+	numCached = totalQueries / 2
+	numUncached = totalQueries - numCached
+	return numCached, numUncached
+}
+
 // runLatencyBenchmark handles the cached/uncached latency tests.
 func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
-	// Determine number of cached vs uncached queries
-	var numCached, numUncached int
-	totalQueries := b.Config.NumQueries
-	if totalQueries < 1 {
-		numCached, numUncached = 0, 0
-	} else if totalQueries == 1 {
-		numCached, numUncached = 0, 1
-	} else if totalQueries == 2 {
-		numCached, numUncached = 1, 1
-	} else if totalQueries == 3 {
-		numCached, numUncached = 1, 2
-	} else {
-		numCached, numUncached = totalQueries/2, totalQueries-(totalQueries/2)
-	}
-
+	numCached, numUncached := calculateLatencyQueryCounts(b.Config.NumQueries)
 	totalLatencyJobsPerServer := numCached + numUncached
 	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer
+
 	if totalLatencyJobs == 0 {
 		return
 	}
@@ -346,33 +353,36 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 
 	// Collect latency results
 	for res := range resultsChan {
-		serverKey := res.serverInfo.String()
-		serverResult, ok := b.Results.Results[serverKey]
-		if !ok {
-			continue
-		}
+		b.processLatencyResult(res)
+	}
+}
 
-		if res.result.Error != nil {
-			serverResult.Errors++
-			if b.Config.Verbose {
-				fmt.Fprintf(os.Stderr, "Latency query error for %s (%s): %v\n", serverKey, res.queryType, res.result.Error)
-			}
-		} else {
-			switch res.queryType {
-			case analysis.Cached:
-				serverResult.CachedLatencies = append(serverResult.CachedLatencies, res.result.Latency)
-			case analysis.Uncached:
-				serverResult.UncachedLatencies = append(serverResult.UncachedLatencies, res.result.Latency)
-			}
+// processLatencyResult updates the benchmark results based on a single latency query job result.
+func (b *Benchmarker) processLatencyResult(res queryJobResult) {
+	serverKey := res.serverInfo.String()
+	serverResult, ok := b.Results.Results[serverKey]
+	if !ok {
+		return // Should not happen if initialized correctly
+	}
+
+	if res.result.Error != nil {
+		serverResult.Errors++
+		if b.Config.Verbose {
+			fmt.Fprintf(os.Stderr, "Latency query error for %s (%s): %v\n", serverKey, res.queryType, res.result.Error)
+		}
+	} else {
+		switch res.queryType {
+		case analysis.Cached:
+			serverResult.CachedLatencies = append(serverResult.CachedLatencies, res.result.Latency)
+		case analysis.Uncached:
+			serverResult.UncachedLatencies = append(serverResult.UncachedLatencies, res.result.Latency)
 		}
 	}
 }
 
-// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
-func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
+// prepareCheckJobs creates a list of query jobs for the enabled checks.
+func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 	var checkJobsList []queryJob
-
-	// Prepare check jobs
 	for _, server := range servers {
 		if b.Config.CheckDNSSEC {
 			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"})
@@ -392,10 +402,15 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dotcomDomain, qType: dns.TypeA, checkType: "dotcom"})
 		}
 	}
+	return checkJobsList
+}
 
+// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
+func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
+	checkJobsList := b.prepareCheckJobs(servers)
 	if len(checkJobsList) == 0 {
-		return
-	} // No checks enabled
+		return // No checks enabled
+	}
 
 	jobs := make(chan queryJob, len(checkJobsList))
 	resultsChan := make(chan queryJobResult, len(checkJobsList))
@@ -426,35 +441,40 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 
 	// Process check results
 	for res := range resultsChan {
-		serverKey := res.serverInfo.String()
-		serverResult, ok := b.Results.Results[serverKey]
-		if !ok {
-			continue
-		}
+		b.processCheckResult(res)
+	}
+}
 
-		if res.result.Error != nil && b.Config.Verbose {
-			fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.Title(res.checkType), serverKey, res.result.Error)
-		}
+// processCheckResult updates the benchmark results based on a single check job result.
+func (b *Benchmarker) processCheckResult(res queryJobResult) {
+	serverKey := res.serverInfo.String()
+	serverResult, ok := b.Results.Results[serverKey]
+	if !ok {
+		return // Should not happen
+	}
 
-		// Update results based on check type
-		switch res.checkType {
-		case "dnssec":
-			supportsDNSSEC := checkADFlag(res.result)
-			serverResult.SupportsDNSSEC = &supportsDNSSEC
-		case "nxdomain":
-			hijacks := checkNXDOMAINHijack(res.result)
-			serverResult.HijacksNXDOMAIN = &hijacks
-		case "rebinding":
-			blocks := checkRebindingProtection(res.result)
-			serverResult.BlocksRebinding = &blocks
-		case "accuracy":
-			accurate := checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
-			serverResult.IsAccurate = &accurate
-		case "dotcom":
-			if res.result.Error == nil {
-				latency := res.result.Latency
-				serverResult.DotcomLatency = &latency
-			}
+	if res.result.Error != nil && b.Config.Verbose {
+		fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.Title(res.checkType), serverKey, res.result.Error)
+	}
+
+	// Update results based on check type
+	switch res.checkType {
+	case "dnssec":
+		supportsDNSSEC := checkADFlag(res.result)
+		serverResult.SupportsDNSSEC = &supportsDNSSEC
+	case "nxdomain":
+		hijacks := checkNXDOMAINHijack(res.result)
+		serverResult.HijacksNXDOMAIN = &hijacks
+	case "rebinding":
+		blocks := checkRebindingProtection(res.result)
+		serverResult.BlocksRebinding = &blocks
+	case "accuracy":
+		accurate := checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+		serverResult.IsAccurate = &accurate
+	case "dotcom":
+		if res.result.Error == nil {
+			latency := res.result.Latency
+			serverResult.DotcomLatency = &latency
 		}
 	}
 }
