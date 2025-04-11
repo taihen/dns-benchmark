@@ -28,7 +28,7 @@ func main() {
 	}
 
 	// Create and run the benchmarker
-	fmt.Printf("DNS Benchmark v%s\n", version)
+	fmt.Printf("DNS Benchmark %s\n", version) // Removed 'v' prefix here
 	fmt.Println("Running benchmark...")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
 	results := benchmarker.Run()
