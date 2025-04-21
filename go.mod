@@ -4,7 +4,7 @@ go 1.24.1
 
 require (
 	github.com/miekg/dns v1.1.65
-	github.com/quic-go/quic-go v0.50.1
+	github.com/quic-go/quic-go v0.51.0
 	golang.org/x/time v0.11.0
 )
 
@@ -14,7 +14,6 @@ require (
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
-	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
