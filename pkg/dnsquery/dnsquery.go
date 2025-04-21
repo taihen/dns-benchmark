@@ -50,6 +50,7 @@ type QueryResult struct {
 
 // --- Protocol Specific Query Functions ---
 
+// Handles DNS queries using different protocols (UDP, TCP, DoT, DoH, DoQ).
 // performQueryWithClient handles UDP, TCP, and DoT queries using miekg/dns client.
 func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
@@ -495,7 +496,7 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
 	defer wg.Done()
 	for job := range jobs {
-		_ = b.Limiter.Wait(context.Background()) // Apply rate limit
+		_ = b.Limiter.Wait(context.Background())                                                 // Apply rate limit
 		queryResult := PerformQueryFunc(job.serverInfo, job.domain, job.qType, b.Config.Timeout) // Use the variable
 		// Pass back identifying info
 		results <- queryJobResult{

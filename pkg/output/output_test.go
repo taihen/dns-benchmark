@@ -14,6 +14,7 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
+// Test cases for formatting latency values.
 func TestFormatLatency(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -234,12 +235,12 @@ func createSampleResults() *analysis.BenchmarkResults {
 func TestPrintConsoleResults(t *testing.T) {
 	results := createSampleResults()
 	cfg := &config.Config{
-		CheckDNSSEC:       true,
-		CheckNXDOMAIN:     true,
-		CheckRebinding:    true,
-		AccuracyCheckFile: "dummy.txt", // Enable accuracy check output
+		CheckDNSSEC:         true,
+		CheckNXDOMAIN:       true,
+		CheckRebinding:      true,
+		AccuracyCheckFile:   "dummy.txt", // Enable accuracy check output
 		AccuracyCheckDomain: "test.local.",
-		CheckDotcom:       true,
+		CheckDotcom:         true,
 	}
 
 	var buf bytes.Buffer
@@ -264,16 +265,16 @@ func TestPrintConsoleResults(t *testing.T) {
 
 	// Check specific values for the best server (1.1.1.1)
 	assert.Contains(t, output, "1.1.1.1:53")
-	assert.Contains(t, output, "11.0 ms") // Avg Cached
-	assert.Contains(t, output, "1.4 ms")  // StdDev Cached
-	assert.Contains(t, output, "25.0 ms") // Avg Uncached
-	assert.Contains(t, output, "5.0 ms")  // StdDev Uncached
-	assert.Contains(t, output, "100.0%") // Reliability
-	assert.Contains(t, output, "15.0 ms") // .com Latency
-	assert.Contains(t, output, "Yes")     // DNSSEC
+	assert.Contains(t, output, "11.0 ms")   // Avg Cached
+	assert.Contains(t, output, "1.4 ms")    // StdDev Cached
+	assert.Contains(t, output, "25.0 ms")   // Avg Uncached
+	assert.Contains(t, output, "5.0 ms")    // StdDev Uncached
+	assert.Contains(t, output, "100.0%")    // Reliability
+	assert.Contains(t, output, "15.0 ms")   // .com Latency
+	assert.Contains(t, output, "Yes")       // DNSSEC
 	assert.Contains(t, output, "No Hijack") // NXDOMAIN
-	assert.Contains(t, output, "Blocks")  // Rebinding
-	assert.Contains(t, output, "Accurate") // Accuracy
+	assert.Contains(t, output, "Blocks")    // Rebinding
+	assert.Contains(t, output, "Accurate")  // Accuracy
 
 	// Check specific values for the second server (8.8.8.8)
 	assert.Contains(t, output, "8.8.8.8:53")
@@ -281,11 +282,11 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "N/A")     // StdDev Cached (n=1)
 	assert.Contains(t, output, "35.0 ms") // Avg Uncached
 	// assert.Contains(t, output, "N/A")     // StdDev Uncached (n=1) - This might appear multiple times, check specific column context if needed
-	assert.Contains(t, output, "66.7%")   // Reliability
+	assert.Contains(t, output, "66.7%") // Reliability
 	// assert.Contains(t, output, "N/A")     // .com Latency
-	assert.Contains(t, output, "Yes")     // DNSSEC
+	assert.Contains(t, output, "Yes") // DNSSEC
 	// assert.Contains(t, output, "N/A")     // NXDOMAIN
-	assert.Contains(t, output, "Allows")  // Rebinding
+	assert.Contains(t, output, "Allows")   // Rebinding
 	assert.Contains(t, output, "Mismatch") // Accuracy
 
 	// Check that summary is NOT printed because the writer is not os.Stdout
@@ -335,20 +336,20 @@ func TestWriteCSVResults(t *testing.T) {
 	// Check Data Rows (order is sorted: 1.1.1.1, 8.8.8.8, 9.9.9.9)
 	// Row 1: 1.1.1.1
 	assert.Equal(t, "1.1.1.1:53", records[1][0])
-	assert.Equal(t, "11.000", records[1][1]) // Avg Cached
-	assert.Equal(t, "1.414", records[1][2])  // StdDev Cached
-	assert.Equal(t, "25.000", records[1][3]) // Avg Uncached
-	assert.Equal(t, "5.000", records[1][4])  // StdDev Uncached
-	assert.Equal(t, "100.0", records[1][5]) // Reliability
-	assert.Equal(t, "2", records[1][6])     // Success Cached
-	assert.Equal(t, "3", records[1][7])     // Success Uncached
-	assert.Equal(t, "0", records[1][8])     // Errors
-	assert.Equal(t, "5", records[1][9])     // Total Queries
+	assert.Equal(t, "11.000", records[1][1])  // Avg Cached
+	assert.Equal(t, "1.414", records[1][2])   // StdDev Cached
+	assert.Equal(t, "25.000", records[1][3])  // Avg Uncached
+	assert.Equal(t, "5.000", records[1][4])   // StdDev Uncached
+	assert.Equal(t, "100.0", records[1][5])   // Reliability
+	assert.Equal(t, "2", records[1][6])       // Success Cached
+	assert.Equal(t, "3", records[1][7])       // Success Uncached
+	assert.Equal(t, "0", records[1][8])       // Errors
+	assert.Equal(t, "5", records[1][9])       // Total Queries
 	assert.Equal(t, "15.000", records[1][10]) // Dotcom
-	assert.Equal(t, "true", records[1][11]) // DNSSEC
-	assert.Equal(t, "false", records[1][12]) // NXDOMAIN
-	assert.Equal(t, "true", records[1][13]) // Rebinding
-	assert.Equal(t, "true", records[1][14]) // Accuracy
+	assert.Equal(t, "true", records[1][11])   // DNSSEC
+	assert.Equal(t, "false", records[1][12])  // NXDOMAIN
+	assert.Equal(t, "true", records[1][13])   // Rebinding
+	assert.Equal(t, "true", records[1][14])   // Accuracy
 
 	// Row 2: 8.8.8.8
 	assert.Equal(t, "8.8.8.8:53", records[2][0])
@@ -369,20 +370,20 @@ func TestWriteCSVResults(t *testing.T) {
 
 	// Row 3: 9.9.9.9
 	assert.Equal(t, "tls://9.9.9.9:853", records[3][0])
-	assert.Equal(t, "N/A", records[3][1])   // Avg Cached
-	assert.Equal(t, "N/A", records[3][2])   // StdDev Cached
-	assert.Equal(t, "N/A", records[3][3])   // Avg Uncached
-	assert.Equal(t, "N/A", records[3][4])   // StdDev Uncached
-	assert.Equal(t, "0.0", records[3][5])   // Reliability
-	assert.Equal(t, "0", records[3][6])     // Success Cached
-	assert.Equal(t, "0", records[3][7])     // Success Uncached
-	assert.Equal(t, "4", records[3][8])     // Errors
-	assert.Equal(t, "4", records[3][9])     // Total Queries
-	assert.Equal(t, "N/A", records[3][10])  // Dotcom
-	assert.Equal(t, "N/A", records[3][11])  // DNSSEC
-	assert.Equal(t, "N/A", records[3][12])  // NXDOMAIN
-	assert.Equal(t, "N/A", records[3][13])  // Rebinding
-	assert.Equal(t, "N/A", records[3][14])  // Accuracy
+	assert.Equal(t, "N/A", records[3][1])  // Avg Cached
+	assert.Equal(t, "N/A", records[3][2])  // StdDev Cached
+	assert.Equal(t, "N/A", records[3][3])  // Avg Uncached
+	assert.Equal(t, "N/A", records[3][4])  // StdDev Uncached
+	assert.Equal(t, "0.0", records[3][5])  // Reliability
+	assert.Equal(t, "0", records[3][6])    // Success Cached
+	assert.Equal(t, "0", records[3][7])    // Success Uncached
+	assert.Equal(t, "4", records[3][8])    // Errors
+	assert.Equal(t, "4", records[3][9])    // Total Queries
+	assert.Equal(t, "N/A", records[3][10]) // Dotcom
+	assert.Equal(t, "N/A", records[3][11]) // DNSSEC
+	assert.Equal(t, "N/A", records[3][12]) // NXDOMAIN
+	assert.Equal(t, "N/A", records[3][13]) // Rebinding
+	assert.Equal(t, "N/A", records[3][14]) // Accuracy
 }
 
 func TestWriteJSONResults(t *testing.T) {

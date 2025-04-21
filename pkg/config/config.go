@@ -26,6 +26,7 @@ const (
 )
 
 // ServerInfo holds details about a DNS server endpoint.
+// Represents DNS server configuration details.
 type ServerInfo struct {
 	Address  string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
 	Protocol ProtocolType
@@ -39,18 +40,22 @@ func (si ServerInfo) String() string {
 	case DOH:
 		return si.Address // DoH address is the full URL
 	case DOT:
- 		// Use Hostname for DoT if it's not an IP, otherwise use Address (which includes port)
+		// Use Hostname for DoT if it's not an IP, otherwise use Address (which includes port)
 		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
 			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil { port = "853" } // Default DoT port
+			if err != nil {
+				port = "853"
+			} // Default DoT port
 			return fmt.Sprintf("tls://%s", net.JoinHostPort(si.Hostname, port))
 		}
 		return fmt.Sprintf("tls://%s", si.Address) // Fallback to using Address
 	case DOQ:
- 		// Use Hostname for DoQ if it's not an IP, otherwise use Address
+		// Use Hostname for DoQ if it's not an IP, otherwise use Address
 		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
 			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil { port = "853" } // Default DoQ port
+			if err != nil {
+				port = "853"
+			} // Default DoQ port
 			return fmt.Sprintf("quic://%s", net.JoinHostPort(si.Hostname, port))
 		}
 		return fmt.Sprintf("quic://%s", si.Address)
@@ -60,7 +65,6 @@ func (si ServerInfo) String() string {
 		return si.Address
 	}
 }
-
 
 var resolvConfNameserverRegex = regexp.MustCompile(`^\s*nameserver\s+([^\s]+)\s*$`)
 
@@ -244,35 +248,50 @@ func readServerStringsFromFile(filePath string) ([]string, error) {
 
 // isValidHostname checks if a string is a potentially valid hostname (basic check).
 func isValidHostname(hostname string) bool {
-	if hostname == "" { return false }
-	if ip := net.ParseIP(hostname); ip != nil { return true } // Allow IPs
+	if hostname == "" {
+		return false
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return true
+	} // Allow IPs
 
 	// RFC 1123: labels can contain letters, digits, hyphen. Max 63 chars. Cannot start/end with hyphen.
 	// Total length max 253.
-	if len(hostname) > 253 { return false }
+	if len(hostname) > 253 {
+		return false
+	}
 
 	labels := strings.Split(hostname, ".")
 	if len(labels) == 1 && hostname != "localhost" {
 		// Allow single label if it doesn't contain invalid chars and isn't all numeric (could be mistaken for IP)
-		if strings.ContainsAny(hostname, " :/\\") { return false }
+		if strings.ContainsAny(hostname, " :/\\") {
+			return false
+		}
 		// Check if purely numeric - this is a basic check and might incorrectly flag valid single-label names
-		if _, err := strconv.Atoi(hostname); err == nil { return false }
+		if _, err := strconv.Atoi(hostname); err == nil {
+			return false
+		}
 		return true
 	}
 
 	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 { return false } // Empty label or label too long
-		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") { return false }
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		} // Empty label or label too long
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
 		for _, r := range label {
 			isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 			isDigit := r >= '0' && r <= '9'
 			isHyphen := r == '-'
-			if !(isLetter || isDigit || isHyphen) { return false }
+			if !(isLetter || isDigit || isHyphen) {
+				return false
+			}
 		}
 	}
 	return true
 }
-
 
 // parseServerString parses a string endpoint into a ServerInfo struct, handling various protocols and formats.
 func parseServerString(serverStr string) (ServerInfo, error) {
@@ -295,7 +314,7 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 			return ServerInfo{}, fmt.Errorf("invalid DoH URL (missing or invalid host): '%s'", serverStr)
 		}
 		if !isValidHostname(host) {
-			 return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in DoH URL '%s'", host, serverStr)
+			return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in DoH URL '%s'", host, serverStr)
 		}
 		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
 	}
@@ -387,7 +406,6 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 	finalAddr := net.JoinHostPort(host, port)
 	return ServerInfo{Address: finalAddr, Protocol: protocol, Hostname: hostname}, nil
 }
-
 
 // parseAndDeduplicateServers parses string endpoints and removes duplicates.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {

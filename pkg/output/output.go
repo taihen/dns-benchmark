@@ -17,6 +17,7 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
+// Formats and prints benchmark results to the console.
 // PrintConsoleResults formats and prints the benchmark results to the given writer.
 func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) {
 	serverResults := getServerResultsSlice(results)

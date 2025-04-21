@@ -21,7 +21,7 @@ func (qt QueryType) String() string {
 	return "Uncached"
 }
 
-// ServerResult holds the benchmark results and calculated metrics for a single DNS server.
+// Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	ServerAddress     string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
 	CachedLatencies   []time.Duration
