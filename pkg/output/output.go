@@ -445,7 +445,7 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 // --- Formatting Helpers ---
 
 func formatLatency(latency time.Duration, hasSuccess bool) string {
-	if !hasSuccess || latency == 0 {
+	if !hasSuccess { // Allow 0ms latency if successful
 		return "N/A"
 	}
 	return fmt.Sprintf("%.1f ms", float64(latency.Microseconds())/1000.0)
@@ -476,7 +476,7 @@ func formatBoolPointer(val *bool, trueStr, falseStr, nilStr string) string {
 }
 
 func formatMillisFloat(d time.Duration, applicable bool) string {
-	if !applicable || d == 0 {
+	if !applicable { // Allow 0.000 ms if applicable
 		return "N/A"
 	}
 	return fmt.Sprintf("%.3f", float64(d.Microseconds())/1000.0)

@@ -22,6 +22,15 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Function variables for mocking in tests
+var (
+	performUDPQueryFunc = performUDPQuery
+	performTCPQueryFunc = performTCPQuery
+	performDoTQueryFunc = performDoTQuery
+	performDoHQueryFunc = performDoHQuery
+	performDoQQueryFunc = performDoQQuery
+)
+
 const (
 	dnssecCheckDomain         = "dnssec-ok.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
@@ -205,23 +214,26 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	return QueryResult{Latency: latency, Response: response, Error: nil}
 }
 
-// PerformQuery acts as a dispatcher based on protocol.
-func PerformQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+// performQueryImpl is the actual implementation, assigned to PerformQueryFunc.
+func performQueryImpl(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	switch serverInfo.Protocol {
 	case config.UDP:
-		return performUDPQuery(serverInfo, domain, qType, timeout)
+		return performUDPQueryFunc(serverInfo, domain, qType, timeout)
 	case config.TCP:
-		return performTCPQuery(serverInfo, domain, qType, timeout)
+		return performTCPQueryFunc(serverInfo, domain, qType, timeout)
 	case config.DOT:
-		return performDoTQuery(serverInfo, domain, qType, timeout)
+		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
 	case config.DOH:
-		return performDoHQuery(serverInfo, domain, qType, timeout)
+		return performDoHQueryFunc(serverInfo, domain, qType, timeout)
 	case config.DOQ:
-		return performDoQQuery(serverInfo, domain, qType, timeout)
+		return performDoQQueryFunc(serverInfo, domain, qType, timeout)
 	default:
 		return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
 	}
 }
+
+// PerformQueryFunc is a variable holding the query function implementation, allowing mocking.
+var PerformQueryFunc = performQueryImpl
 
 // queryJob represents a single query task.
 type queryJob struct {
@@ -484,7 +496,7 @@ func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, resu
 	defer wg.Done()
 	for job := range jobs {
 		_ = b.Limiter.Wait(context.Background()) // Apply rate limit
-		queryResult := PerformQuery(job.serverInfo, job.domain, job.qType, b.Config.Timeout)
+		queryResult := PerformQueryFunc(job.serverInfo, job.domain, job.qType, b.Config.Timeout) // Use the variable
 		// Pass back identifying info
 		results <- queryJobResult{
 			serverInfo: job.serverInfo,
