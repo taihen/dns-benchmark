@@ -4,7 +4,7 @@
 [![Release](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml/badge.svg)](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/taihen/dns-benchmark)](https://goreportcard.com/report/github.com/taihen/dns-benchmark)
 
-This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
+This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable recursive DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
 > [!WARNING]
 > **Ethical Querying:** This tool implements safe querying practices (rate limiting, controlled concurrency) to avoid abusing public DNS services. Please use it responsively.
@@ -82,4 +82,4 @@ This will create an executable named `dns-benchmark` in the current directory.
 
 ## License
 
-MIT
+[MIT](LICENSE)

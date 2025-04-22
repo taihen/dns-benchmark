@@ -21,7 +21,7 @@ func (qt QueryType) String() string {
 	return "Uncached"
 }
 
-// ServerResult holds the benchmark results and calculated metrics for a single DNS server.
+// Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	ServerAddress     string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
 	CachedLatencies   []time.Duration
@@ -42,8 +42,6 @@ type ServerResult struct {
 	AvgUncachedLatency    time.Duration
 	StdDevUncachedLatency time.Duration
 	Reliability           float64 // Based on latency query success rate
-	// TODO: Add fields for min/max latency if desired.
-	// TODO: Consider separate error counts per check type (DNSSEC, NXDOMAIN etc.) for more granular reporting.
 }
 
 // BenchmarkResults holds the results for all tested servers.
@@ -92,7 +90,8 @@ func (sr *ServerResult) CalculateMetrics() {
 	}
 }
 
-// calculateAverage computes the average for a slice of durations.
+// calculateAverage computes the average duration from a slice of time.Duration values.
+// It returns a zero duration if the input slice is empty.
 func calculateAverage(latencies []time.Duration) time.Duration {
 	if len(latencies) == 0 {
 		return 0
@@ -105,7 +104,10 @@ func calculateAverage(latencies []time.Duration) time.Duration {
 	return time.Duration(math.Round(avgNano))
 }
 
-// calculateStdDev computes the standard deviation for a slice of durations.
+// calculateStdDev computes the standard deviation of durations in a slice.
+// It requires at least two data points to calculate a meaningful standard deviation,
+// returning a zero duration if the slice has fewer than 2 elements.
+// It uses the sample standard deviation formula (dividing by n-1).
 func calculateStdDev(latencies []time.Duration, average time.Duration) time.Duration {
 	if len(latencies) < 2 {
 		return 0
@@ -128,6 +130,4 @@ func (br *BenchmarkResults) Analyze() {
 	for _, serverResult := range br.Results {
 		serverResult.CalculateMetrics()
 	}
-	// TODO: Add logic to sort results here instead of in output package?
-	// TODO: Implement comparative analysis (e.g., statistical significance tests).
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"strconv" // Added strconv import
 	"strings"
 	"time"
 )
@@ -28,7 +29,7 @@ const (
 type ServerInfo struct {
 	Address  string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
 	Protocol ProtocolType
-	Hostname string // Hostname for TLS SNI / DoH URL host.
+	Hostname string // Hostname for TLS SNI / DoH URL host. Should NOT contain brackets for IPv6.
 	DoHPath  string // Path for DoH endpoint (e.g., /dns-query).
 }
 
@@ -36,12 +37,29 @@ type ServerInfo struct {
 func (si ServerInfo) String() string {
 	switch si.Protocol {
 	case DOH:
-		return si.Address
+		return si.Address // DoH address is the full URL
 	case DOT:
-		return fmt.Sprintf("tls://%s", si.Address)
+		// Use Hostname for DoT if it's not an IP, otherwise use Address (which includes port)
+		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
+			_, port, err := net.SplitHostPort(si.Address)
+			if err != nil {
+				port = "853"
+			} // Default DoT port
+			return fmt.Sprintf("tls://%s", net.JoinHostPort(si.Hostname, port))
+		}
+		return fmt.Sprintf("tls://%s", si.Address) // Fallback to using Address
 	case DOQ:
+		// Use Hostname for DoQ if it's not an IP, otherwise use Address
+		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
+			_, port, err := net.SplitHostPort(si.Address)
+			if err != nil {
+				port = "853"
+			} // Default DoQ port
+			return fmt.Sprintf("quic://%s", net.JoinHostPort(si.Hostname, port))
+		}
 		return fmt.Sprintf("quic://%s", si.Address)
 	case TCP:
+		// Preserve tcp:// prefix for TCP endpoints
 		return fmt.Sprintf("tcp://%s", si.Address)
 	default: // UDP
 		return si.Address
@@ -102,7 +120,6 @@ var DefaultDNSStrings = []string{
 func LoadConfig() *Config {
 	cfg := &Config{}
 
-	// Define flags
 	flag.StringVar(&cfg.ServersFile, "f", "", "Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)")
 	flag.IntVar(&cfg.NumQueries, "n", 4, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
@@ -228,65 +245,191 @@ func readServerStringsFromFile(filePath string) ([]string, error) {
 	return servers, nil
 }
 
-// parseServerString parses a string endpoint into a ServerInfo struct, handling various protocols and formats.
+// isValidHostname performs a basic validation of a hostname string.
+// It checks for general validity but does not guarantee DNS resolvability.
+// Allows IPv4/IPv6 addresses, and hostnames according to RFC 1123/253.
+func isValidHostname(hostname string) bool {
+	if hostname == "" {
+		return false
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return true
+	} // Allow IPs
+
+	// RFC 1123: labels can contain letters, digits, hyphen. Max 63 chars. Cannot start/end with hyphen.
+	// Total length max 253.
+	if len(hostname) > 253 {
+		return false
+	}
+
+	labels := strings.Split(hostname, ".")
+	if len(labels) == 1 && hostname != "localhost" {
+		// Allow single label if it doesn't contain invalid chars and isn't all numeric (could be mistaken for IP)
+		if strings.ContainsAny(hostname, " :/\\") {
+			return false
+		}
+		// Check if purely numeric - this is a basic check and might incorrectly flag valid single-label names
+		if _, err := strconv.Atoi(hostname); err == nil {
+			return false
+		}
+		return true
+	}
+
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		} // Empty label or label too long
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false // Invalid label start/end
+		}
+		for _, r := range label {
+			isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+			isDigit := r >= '0' && r <= '9'
+			isHyphen := r == '-'
+			if !(isLetter || isDigit || isHyphen) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// parseServerString parses a server endpoint string into a ServerInfo struct.
+// It handles various formats including IP:port, Host:port, and URLs for DoH.
+// It detects the protocol (UDP, TCP, DoT, DoH, DoQ) from the string prefix or scheme.
+// Returns an error if the string is invalid or format is unrecognized.
 func parseServerString(serverStr string) (ServerInfo, error) {
 	serverStr = strings.TrimSpace(serverStr)
+	if serverStr == "" {
+		return ServerInfo{}, fmt.Errorf("server string cannot be empty or only whitespace")
+	}
+
+	// Handle DoH separately as it's a full URL
 	if strings.HasPrefix(serverStr, "https://") {
 		u, err := url.Parse(serverStr)
 		if err != nil {
 			return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err)
 		}
 		if u.Scheme != "https" {
-			return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme '%s': must be https", serverStr)
+			return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme in '%s': must be https", serverStr)
 		}
 		host := u.Hostname()
+		if host == "" {
+			return ServerInfo{}, fmt.Errorf("invalid DoH URL (missing or invalid host): '%s'", serverStr)
+		}
+		if !isValidHostname(host) {
+			return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in DoH URL '%s'", host, serverStr)
+		}
 		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
-	} else if strings.HasPrefix(serverStr, "tls://") {
-		addr := strings.TrimPrefix(serverStr, "tls://")
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			host, port = addr, "853"
-		} // Default DoT port
-		addr = net.JoinHostPort(host, port)
-		return ServerInfo{Address: addr, Protocol: DOT, Hostname: host}, nil
-	} else if strings.HasPrefix(serverStr, "quic://") {
-		addr := strings.TrimPrefix(serverStr, "quic://")
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			host, port = addr, "853"
-		} // Default DoQ port
-		addr = net.JoinHostPort(host, port)
-		return ServerInfo{Address: addr, Protocol: DOQ, Hostname: host}, nil
-	} else if strings.HasPrefix(serverStr, "tcp://") {
-		addr := strings.TrimPrefix(serverStr, "tcp://")
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			host, port = addr, "53"
-		} // Default DNS port
-		addr = net.JoinHostPort(host, port)
-		return ServerInfo{Address: addr, Protocol: TCP, Hostname: host}, nil
-	} else { // Assume UDP
-		addr := serverStr
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			host, port = addr, "53"
-		} // Default DNS port
-		addr = net.JoinHostPort(host, port)
-		return ServerInfo{Address: addr, Protocol: UDP, Hostname: host}, nil
 	}
+
+	// Handle other protocols (UDP, TCP, DoT, DoQ)
+	var protocol ProtocolType
+	var defaultPort string
+	addrPart := serverStr // The part potentially containing host/IP and port
+
+	// Detect protocol and strip prefix
+	if strings.HasPrefix(addrPart, "tls://") {
+		protocol = DOT
+		defaultPort = "853"
+		addrPart = strings.TrimPrefix(addrPart, "tls://")
+	} else if strings.HasPrefix(addrPart, "quic://") {
+		protocol = DOQ
+		defaultPort = "853"
+		addrPart = strings.TrimPrefix(addrPart, "quic://")
+	} else if strings.HasPrefix(addrPart, "tcp://") {
+		protocol = TCP
+		defaultPort = "53"
+		addrPart = strings.TrimPrefix(addrPart, "tcp://")
+	} else {
+		protocol = UDP // Default
+		defaultPort = "53"
+		// Check for accidental schemes like http://, but ignore if it looks like IPv6
+		if i := strings.Index(addrPart, "://"); i != -1 && !strings.Contains(addrPart[:i], ":") {
+			if addrPart[:i] != "udp" { // Allow explicit udp://
+				fmt.Fprintf(os.Stderr, "Warning: Unrecognized protocol scheme '%s' in '%s', assuming UDP.\n", addrPart[:i], serverStr)
+			}
+			addrPart = addrPart[i+3:]
+		}
+	}
+
+	// Now addrPart should be host, ip, [ipv6], host:port, ip:port, or [ipv6]:port
+	host, port, err := net.SplitHostPort(addrPart)
+	hostname := ""
+	if err == nil {
+		// Remove brackets from IPv6 literal, set both host and hostname to unbracketed form
+		hostname = strings.Trim(addrPart[:len(addrPart)-len(":"+port)], "[]")
+		host = hostname
+
+		// Validate port is numeric; fallback to defaultPort if not
+		if _, perr := strconv.Atoi(port); perr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, hostname)
+			port = defaultPort
+		}
+	} else {
+		// No port or malformed: assume defaultPort, salvage host if possible
+		host = addrPart
+		port = defaultPort
+		hostname = host
+		// Remove brackets for IPv6 literal without port
+		if strings.HasPrefix(hostname, "[") && strings.HasSuffix(hostname, "]") {
+			hostname = strings.Trim(hostname, "[]")
+			host = hostname
+		}
+		// Salvage logic for entries like "host:bad"
+		if strings.Contains(addrPart, ":") {
+			if ip := net.ParseIP(hostname); ip == nil {
+				parts := strings.SplitN(addrPart, ":", 2)
+				if len(parts) == 2 && isValidHostname(parts[0]) {
+					host = parts[0]
+					hostname = parts[0]
+					fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, host)
+				}
+			}
+		}
+	}
+
+	// Ensure non-IP hostnames contain a dot
+	if net.ParseIP(hostname) == nil && !strings.Contains(hostname, ".") {
+		return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in '%s': must contain a dot for non-IP", hostname, serverStr)
+	}
+
+	// Final validation of the derived hostname
+	if !isValidHostname(hostname) {
+		// Special case: if the original input was just an IPv6 without brackets, it's valid
+		// Check addrPart directly here, as hostname might have been trimmed
+		if ip := net.ParseIP(addrPart); ip != nil && ip.To4() == nil {
+			hostname = addrPart // Use the original IPv6 string as hostname
+			host = addrPart     // Use the original IPv6 string for JoinHostPort
+		} else {
+			return ServerInfo{}, fmt.Errorf("invalid host/IP address derived from '%s': %s", serverStr, hostname)
+		}
+	}
+
+	// JoinHostPort handles adding brackets for IPv6 automatically if needed
+	// Ensure 'host' used here is the correct part (potentially salvaged, or original if no port)
+	// For IPv6, 'host' should NOT have brackets when passed to JoinHostPort if SplitHostPort failed.
+	// However, if SplitHostPort succeeded, 'host' might already have brackets.
+	// net.JoinHostPort correctly handles both bracketed and non-bracketed IPv6 hosts.
+	finalAddr := net.JoinHostPort(host, port)
+	return ServerInfo{Address: finalAddr, Protocol: protocol, Hostname: hostname}, nil
 }
 
-// parseAndDeduplicateServers parses string endpoints and removes duplicates.
+// parseAndDeduplicateServers parses a list of server endpoint strings,
+// converts them to ServerInfo structs, and removes duplicate entries.
+// Deduplication is based on the String() representation of ServerInfo.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	seen := make(map[string]struct{})
-	var result []ServerInfo
+	result := make([]ServerInfo, 0)
 	for _, s := range serverStrings {
 		info, err := parseServerString(s)
 		if err != nil {
+			// Log the error and skip this server string entirely if parsing failed
 			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid server endpoint '%s': %v\n", s, err)
-			continue
+			continue // Skip adding this server
 		}
-		key := info.String()
+		// Deduplicate entries by protocol+address, allowing same address under different protocols
+		key := fmt.Sprintf("%s|%s", info.Protocol, info.Address)
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			result = append(result, info)
@@ -295,7 +438,10 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	return result
 }
 
-// getSystemDNSServers attempts to read system DNS servers (returns IPs only for UDP).
+// getSystemDNSServers attempts to retrieve system DNS resolver addresses.
+// It currently supports Unix-like systems by reading /etc/resolv.conf.
+// On Windows and if detection fails, it returns an error and an empty list.
+// The returned server addresses are intended for UDP queries.
 func getSystemDNSServers() ([]string, error) {
 	// TODO: Implement system DNS detection for Windows (e.g., using registry or PowerShell).
 	// TODO: Consider supporting non-UDP system resolvers if OS provides such info (e.g., DoH URL in some systems).
@@ -330,9 +476,10 @@ func getSystemDNSServers() ([]string, error) {
 	return servers, nil
 }
 
-// loadAccuracyCheckFile reads a file with 'domain IP' per line and returns the first valid pair.
+// loadAccuracyCheckFile reads an accuracy check file to get a domain and expected IP.
+// The file should have lines of 'domain IP', and the first valid entry is used.
+// Invalid lines or IPs are skipped with warnings. Returns error if no valid entry is found.
 func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error) {
-	// TODO: Allow multiple domain/IP pairs for accuracy check? Currently uses first valid one.
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", "", err
@@ -354,23 +501,29 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 			continue
 		}
 
-		domain = strings.TrimSuffix(parts[0], ".") + "." // Ensure FQDN
-		ip = parts[1]
+		domainToCheck := strings.TrimSuffix(parts[0], ".") // Domain for validation
+		ipToCheck := parts[1]
 
-		parsedIP := net.ParseIP(ip)
+		parsedIP := net.ParseIP(ipToCheck)
 		if parsedIP == nil {
-			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid IP in accuracy file %s (line %d): %s\n", filePath, lineNumber, ip)
+			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid IP in accuracy file %s (line %d): %s\n", filePath, lineNumber, ipToCheck)
 			continue
 		}
-		// Basic domain check
-		if !strings.Contains(domain, ".") || len(domain) < 3 {
-			fmt.Fprintf(os.Stderr, "Warning: Skipping potentially invalid domain in accuracy file %s (line %d): %s\n", filePath, lineNumber, domain)
-			continue
+
+		// Basic domain check using the validation function and ensure it contains a dot
+		if !isValidHostname(domainToCheck) || !strings.Contains(domainToCheck, ".") {
+			fmt.Fprintf(os.Stderr, "Warning: Skipping potentially invalid domain in accuracy file %s (line %d): %s\n", filePath, lineNumber, parts[0])
+			continue // Skip this line if domain is invalid
 		}
-		return domain, parsedIP.String(), nil // Return first valid pair
+
+		// If all checks passed for this line, return it as the first valid pair
+		// Ensure returned domain has trailing dot
+		return domainToCheck + ".", parsedIP.String(), nil
 	}
+	// If loop finishes without returning, check for scanner errors first
 	if err := scanner.Err(); err != nil {
 		return "", "", err
 	}
+	// If no scanner error and no valid line found, return the specific error
 	return "", "", fmt.Errorf("no valid 'domain IP' pairs found in %s", filePath)
 }

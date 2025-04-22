@@ -17,6 +17,7 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
+// Formats and prints benchmark results to the console.
 // PrintConsoleResults formats and prints the benchmark results to the given writer.
 func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) {
 	serverResults := getServerResultsSlice(results)
@@ -33,9 +34,8 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 		fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
 
-	w.Flush() // Flush table before summary
+	w.Flush()
 
-	// Print summary only if writing to stdout
 	if writer == os.Stdout {
 		printSummary(writer, serverResults, cfg)
 	}
@@ -83,6 +83,8 @@ func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg 
 
 // --- Helper Functions ---
 
+// getServerResultsSlice extracts the ServerResult slice from the BenchmarkResults map.
+// It converts the map of server results into a slice for easier iteration and sorting.
 func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.ServerResult {
 	slice := make([]*analysis.ServerResult, 0, len(results.Results))
 	for _, res := range results.Results {
@@ -91,7 +93,8 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 	return slice
 }
 
-// sortServerResults sorts primarily by average uncached latency, then cached, handling N/A.
+// sortServerResults sorts the ServerResult slice based on performance metrics.
+// It prioritizes sorting by uncached latency, then cached latency, to rank servers by speed.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
 		resI := results[i]
@@ -99,29 +102,31 @@ func sortServerResults(results []*analysis.ServerResult) {
 		hasUncachedI := len(resI.UncachedLatencies) > 0
 		hasUncachedJ := len(resJ.UncachedLatencies) > 0
 		if hasUncachedI && !hasUncachedJ {
-			return true
+			return true // i has uncached, j doesn't, i is "better"
 		}
 		if !hasUncachedI && hasUncachedJ {
-			return false
+			return false // j has uncached, i doesn't, j is "better"
 		}
 		if hasUncachedI && hasUncachedJ && resI.AvgUncachedLatency != resJ.AvgUncachedLatency {
-			return resI.AvgUncachedLatency < resJ.AvgUncachedLatency
+			return resI.AvgUncachedLatency < resJ.AvgUncachedLatency // Compare uncached latency if both have it
 		}
 		hasCachedI := len(resI.CachedLatencies) > 0
 		hasCachedJ := len(resJ.CachedLatencies) > 0
 		if hasCachedI && !hasCachedJ {
-			return true
+			return true // i has cached, j doesn't, i is "better"
 		}
 		if !hasCachedI && hasCachedJ {
-			return false
+			return false // j has cached, i doesn't, j is "better"
 		}
 		if hasCachedI && hasCachedJ && resI.AvgCachedLatency != resJ.AvgCachedLatency {
-			return resI.AvgCachedLatency < resJ.AvgCachedLatency
+			return resI.AvgCachedLatency < resJ.AvgCachedLatency // Compare cached latency if both have it
 		}
-		return false // Keep original order if equal or N/A
+		return false // No significant difference for sorting
 	})
 }
 
+// buildHeader constructs the header row for console output.
+// It includes columns for server address, latency metrics, reliability, and optional checks.
 func buildHeader(cfg *config.Config) []string {
 	header := []string{"DNS Server", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Reliability"}
 	if cfg.CheckDotcom {
@@ -142,6 +147,8 @@ func buildHeader(cfg *config.Config) []string {
 	return header
 }
 
+// buildRow constructs a data row for console output for a single server result.
+// It formats the ServerResult data into a string slice based on the configured checks.
 func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	row := []string{
 		res.ServerAddress,
@@ -169,6 +176,8 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	return row
 }
 
+// buildCSVHeader constructs the header row for CSV output.
+// It includes all possible fields for benchmark results in CSV format.
 func buildCSVHeader(cfg *config.Config) []string {
 	header := []string{
 		"ServerAddress",
@@ -196,6 +205,8 @@ func buildCSVHeader(cfg *config.Config) []string {
 	return header
 }
 
+// buildCSVRow constructs a data row for CSV output for a single server result.
+// It formats the ServerResult data into a string slice for CSV, including all relevant fields.
 func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	row := []string{
 		res.ServerAddress,
@@ -228,6 +239,7 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 }
 
 // JSONServerResult defines the structure for JSON output.
+// It specifies how ServerResult data is serialized into JSON format.
 type JSONServerResult struct {
 	ServerAddress             string   `json:"serverAddress"`
 	AvgCachedLatencyMs        *float64 `json:"avgCachedLatencyMs,omitempty"`
@@ -246,6 +258,8 @@ type JSONServerResult struct {
 	IsAccurate                *bool    `json:"isAccurate,omitempty"`
 }
 
+// buildJSONResult transforms a ServerResult into a JSONServerResult.
+// It prepares the data for JSON output, converting relevant fields to the JSONServerResult structure.
 func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerResult {
 	jsonRes := JSONServerResult{
 		ServerAddress:             res.ServerAddress,
@@ -364,8 +378,6 @@ func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analy
 	return bestServer
 }
 
-// compareUncachedLatency returns true if 'current' is better than 'best' based on uncached latency.
-// It handles cases where one or both servers might lack uncached results.
 func compareUncachedLatency(current, best *analysis.ServerResult, currentLowestUncached time.Duration) bool {
 	hasUncachedCurrent := len(current.UncachedLatencies) > 0
 	hasUncachedBest := len(best.UncachedLatencies) > 0
@@ -384,8 +396,6 @@ func compareUncachedLatency(current, best *analysis.ServerResult, currentLowestU
 	return false
 }
 
-// compareCachedLatency returns true if 'current' is better than 'best' based on cached latency.
-// Assumes uncached latency comparison was inconclusive. Handles N/A cases.
 func compareCachedLatency(current, best *analysis.ServerResult) bool {
 	hasCachedCurrent := len(current.CachedLatencies) > 0
 	hasCachedBest := len(best.CachedLatencies) > 0
@@ -404,12 +414,10 @@ func compareCachedLatency(current, best *analysis.ServerResult) bool {
 	return false
 }
 
-// printServerWarnings iterates through servers and prints warnings for issues found.
 func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bestServer *analysis.ServerResult, cfg *config.Config) {
 	const reliabilityThreshold = 99.0
 	issuesFound := false
 	for _, res := range results {
-		// Skip the best server if one was found
 		if bestServer != nil && res.ServerAddress == bestServer.ServerAddress {
 			continue
 		}
@@ -444,13 +452,17 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 
 // --- Formatting Helpers ---
 
+// formatLatency formats a latency duration for console output.
+// It returns "N/A" if there were no successful queries, or the latency in milliseconds with one decimal place.
 func formatLatency(latency time.Duration, hasSuccess bool) string {
-	if !hasSuccess || latency == 0 {
+	if !hasSuccess {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.1f ms", float64(latency.Microseconds())/1000.0)
 }
 
+// formatStdDev formats a standard deviation duration for console output.
+// It returns "N/A" if there's not enough data (less than 2 data points), or the std dev in milliseconds.
 func formatStdDev(stdDev time.Duration, hasEnoughData bool) string {
 	if !hasEnoughData {
 		return "N/A"
@@ -458,6 +470,8 @@ func formatStdDev(stdDev time.Duration, hasEnoughData bool) string {
 	return fmt.Sprintf("%.1f ms", float64(stdDev.Microseconds())/1000.0)
 }
 
+// formatDurationPointer formats a duration pointer for console output.
+// It handles nil pointers by returning "N/A", otherwise formats the duration in milliseconds.
 func formatDurationPointer(d *time.Duration) string {
 	if d == nil {
 		return "N/A"
@@ -465,6 +479,8 @@ func formatDurationPointer(d *time.Duration) string {
 	return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000.0)
 }
 
+// formatBoolPointer formats a boolean pointer for console output.
+// It returns trueStr, falseStr, or nilStr based on the boolean pointer's value or nil-ness.
 func formatBoolPointer(val *bool, trueStr, falseStr, nilStr string) string {
 	if val == nil {
 		return nilStr
@@ -475,13 +491,17 @@ func formatBoolPointer(val *bool, trueStr, falseStr, nilStr string) string {
 	return falseStr
 }
 
+// formatMillisFloat formats a duration to milliseconds as a float string for CSV.
+// It returns "N/A" if not applicable, otherwise milliseconds with 3 decimal places.
 func formatMillisFloat(d time.Duration, applicable bool) string {
-	if !applicable || d == 0 {
+	if !applicable { // Allow 0.000 ms if applicable
 		return "N/A"
 	}
 	return fmt.Sprintf("%.3f", float64(d.Microseconds())/1000.0)
 }
 
+// formatMillisFloatPointer formats a duration pointer to milliseconds as a float string for CSV.
+// It handles nil duration pointers by returning "N/A", otherwise formats to milliseconds.
 func formatMillisFloatPointer(d *time.Duration) string {
 	if d == nil {
 		return "N/A"
@@ -489,6 +509,8 @@ func formatMillisFloatPointer(d *time.Duration) string {
 	return fmt.Sprintf("%.3f", float64(d.Microseconds())/1000.0)
 }
 
+// formatBoolPointerCSV formats a boolean pointer for CSV output.
+// It returns "N/A" for nil, and "true" or "false" strings for boolean values.
 func formatBoolPointerCSV(val *bool) string {
 	if val == nil {
 		return "N/A"
