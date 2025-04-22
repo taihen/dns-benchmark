@@ -377,7 +377,7 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 		// We need to re-check the original addrPart because 'hostname' might have brackets removed.
 		if strings.Contains(addrPart, ":") {
 			// If it wasn't a valid IPv6 literal that failed SplitHostPort...
-			if ip := net.ParseIP(hostname); ip == nil || ip.To4() != nil {
+			if ip := net.ParseIP(hostname); ip == nil {
 				parts := strings.SplitN(addrPart, ":", 2)
 				// Check if the salvaged part looks like a valid host
 				if len(parts) == 2 && isValidHostname(parts[0]) {
