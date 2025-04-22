@@ -203,10 +203,10 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 			serverStrings: []string{"1.1.1.1", "tcp://8.8.8.8", "tls://9.9.9.9", "https://cloudflare-dns.com/dns-query", "quic://dns.adguard-dns.com"},
 			want: []ServerInfo{
 				{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
-				// invalid-entry now returns error and is skipped
+				{Address: "8.8.8.8:53", Protocol: TCP, Hostname: "8.8.8.8"},
 				{Address: "9.9.9.9:853", Protocol: DOT, Hostname: "9.9.9.9"},
-				// badurl returns error and is skipped
-				{Address: "8.8.8.8:53", Protocol: UDP, Hostname: "8.8.8.8"},
+				{Address: "https://cloudflare-dns.com/dns-query", Protocol: DOH, Hostname: "cloudflare-dns.com", DoHPath: "/dns-query"},
+				{Address: "dns.adguard-dns.com:853", Protocol: DOQ, Hostname: "dns.adguard-dns.com"},
 			},
 		},
 		{

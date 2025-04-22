@@ -59,6 +59,7 @@ func (si ServerInfo) String() string {
 		}
 		return fmt.Sprintf("quic://%s", si.Address)
 	case TCP:
+		// Preserve tcp:// prefix for TCP endpoints
 		return fmt.Sprintf("tcp://%s", si.Address)
 	default: // UDP
 		return si.Address
@@ -354,39 +355,43 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 
 	// Now addrPart should be host, ip, [ipv6], host:port, ip:port, or [ipv6]:port
 	host, port, err := net.SplitHostPort(addrPart)
-	hostname := "" // Hostname for SNI/validation
-
+	hostname := ""
 	if err == nil {
-		// Successfully split host and port
-		hostname = host
-		// Remove brackets for hostname if IPv6 literal
-		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-			hostname = strings.Trim(host, "[]")
+		// Remove brackets from IPv6 literal, set both host and hostname to unbracketed form
+		hostname = strings.Trim(addrPart[:len(addrPart)-len(":"+port)], "[]")
+		host = hostname
+
+		// Validate port is numeric; fallback to defaultPort if not
+		if _, perr := strconv.Atoi(port); perr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, hostname)
+			port = defaultPort
 		}
 	} else {
-		// Error likely means no port was specified or format is invalid.
-		host = addrPart // Assume the whole part is the host/IP
+		// No port or malformed: assume defaultPort, salvage host if possible
+		host = addrPart
 		port = defaultPort
-		hostname = host // Use the assumed host as hostname initially
-		// Remove brackets for hostname if IPv6 literal was passed without port
+		hostname = host
+		// Remove brackets for IPv6 literal without port
 		if strings.HasPrefix(hostname, "[") && strings.HasSuffix(hostname, "]") {
 			hostname = strings.Trim(hostname, "[]")
+			host = hostname
 		}
-		// Check if the failure was due to a bad port string (e.g., "host:bad")
-		// and try to salvage the host part if it looks valid.
-		// We need to re-check the original addrPart because 'hostname' might have brackets removed.
+		// Salvage logic for entries like "host:bad"
 		if strings.Contains(addrPart, ":") {
-			// If it wasn't a valid IPv6 literal that failed SplitHostPort...
 			if ip := net.ParseIP(hostname); ip == nil {
 				parts := strings.SplitN(addrPart, ":", 2)
-				// Check if the salvaged part looks like a valid host
 				if len(parts) == 2 && isValidHostname(parts[0]) {
-					host = parts[0]     // Use the salvaged part for JoinHostPort
-					hostname = parts[0] // Use the salvaged part for Hostname field
-					fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, port, host)
+					host = parts[0]
+					hostname = parts[0]
+					fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, host)
 				}
 			}
 		}
+	}
+
+	// Ensure non-IP hostnames contain a dot
+	if net.ParseIP(hostname) == nil && !strings.Contains(hostname, ".") {
+		return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in '%s': must contain a dot for non-IP", hostname, serverStr)
 	}
 
 	// Final validation of the derived hostname
@@ -415,7 +420,7 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 // Deduplication is based on the String() representation of ServerInfo.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	seen := make(map[string]struct{})
-	var result []ServerInfo
+	result := make([]ServerInfo, 0)
 	for _, s := range serverStrings {
 		info, err := parseServerString(s)
 		if err != nil {
@@ -423,7 +428,8 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid server endpoint '%s': %v\n", s, err)
 			continue // Skip adding this server
 		}
-		key := info.String() // Use String() method for deduplication key
+		// Deduplicate entries by protocol+address, allowing same address under different protocols
+		key := fmt.Sprintf("%s|%s", info.Protocol, info.Address)
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			result = append(result, info)
@@ -504,8 +510,8 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 			continue
 		}
 
-		// Basic domain check using the validation function
-		if !isValidHostname(domainToCheck) {
+		// Basic domain check using the validation function and ensure it contains a dot
+		if !isValidHostname(domainToCheck) || !strings.Contains(domainToCheck, ".") {
 			fmt.Fprintf(os.Stderr, "Warning: Skipping potentially invalid domain in accuracy file %s (line %d): %s\n", filePath, lineNumber, parts[0])
 			continue // Skip this line if domain is invalid
 		}
