@@ -48,14 +48,12 @@ type QueryResult struct {
 	Error    error
 }
 
-// --- Protocol Specific Query Functions ---
-
-// Handles DNS queries using different protocols (UDP, TCP, DoT, DoH, DoQ).
-// performQueryWithClient handles UDP, TCP, and DoT queries using miekg/dns client.
+// performQueryWithClient performs a DNS query using a provided dns.Client.
+// It sets up the query message, including EDNS0 for DNSSEC, and handles the client exchange.
 func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
-	msg.SetEdns0(4096, true) // Request DNSSEC
+	msg.SetEdns0(4096, true) // Opt-in to DNSSEC requests via EDNS0
 
 	startTime := time.Now()
 	response, _, err := client.Exchange(msg, serverAddr)
@@ -73,19 +71,23 @@ func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType
 	return QueryResult{Latency: latency, Response: response, Error: nil}
 }
 
+// performUDPQuery performs a DNS query over UDP.
 func performUDPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	client := &dns.Client{Net: "udp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
 	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
 }
 
+// performTCPQuery performs a DNS query over TCP.
 func performTCPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	client := &dns.Client{Net: "tcp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
 	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
 }
 
+// performDoTQuery performs a DNS query over TLS (DoT).
+// It configures TLS settings and uses the "tcp-tls" network.
 func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	tlsConfig := &tls.Config{
-		ServerName: serverInfo.Hostname, // SNI
+		ServerName: serverInfo.Hostname, // for SNI
 		MinVersion: tls.VersionTLS12,
 	}
 	client := &dns.Client{
@@ -96,7 +98,8 @@ func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
 }
 
-// performDoHQuery sends a query using DNS over HTTPS.
+// performDoHQuery performs a DNS query over HTTPS (DoH).
+// It constructs an HTTP request with the DNS query message and sends it to the DoH server.
 func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
@@ -149,7 +152,8 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	return QueryResult{Latency: latency, Response: response, Error: nil}
 }
 
-// performDoQQuery sends a query using DNS over QUIC.
+// performDoQQuery performs a DNS query over QUIC (DoQ).
+// It sets up a QUIC connection, sends the DNS query, and reads the response.
 func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
@@ -521,6 +525,8 @@ func generateUniqueDomain(prefix, suffix string) string {
 
 // --- Check Helper Functions ---
 
+// checkADFlag checks if the Authenticated Data (AD) flag is set in the DNS response.
+// This indicates DNSSEC validation by the resolver.
 func checkADFlag(result QueryResult) bool {
 	if result.Error != nil || result.Response == nil {
 		return false
@@ -528,48 +534,56 @@ func checkADFlag(result QueryResult) bool {
 	return result.Response.AuthenticatedData
 }
 
+// checkNXDOMAINHijack checks for NXDOMAIN hijacking.
+// It determines if a server returns a NOERROR response with records for a deliberately non-existent domain,
+// which is indicative of hijacking.
 func checkNXDOMAINHijack(result QueryResult) bool {
 	if result.Error != nil || result.Response == nil {
 		return false
 	}
 	rcode := result.Response.Rcode
 	if rcode == dns.RcodeNameError {
-		return false
+		return false // Expected NXDOMAIN
 	}
 	if rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 {
-		return true
+		return true // Unexpected NOERROR with answer for NXDOMAIN query
 	}
-	return false
+	return false // Other cases: SERVFAIL, etc., or legitimate NXDOMAIN
 }
 
+// checkRebindingProtection checks for DNS rebinding protection.
+// It queries a domain known to trigger rebinding attempts and expects either an error or no answer.
+// A successful response with answers indicates lack of rebinding protection.
 func checkRebindingProtection(result QueryResult) bool {
 	if result.Error != nil {
-		return true
+		return true // Error implies protection (e.g., refused to resolve private IP)
 	}
 	if result.Response == nil {
-		return true
+		return true // No response also implies protection
 	}
 	if result.Response.Rcode != dns.RcodeSuccess {
-		return true
+		return true // Non-success Rcode also implies protection
 	}
 	if len(result.Response.Answer) == 0 {
-		return true
+		return true // No answer implies protection
 	}
-	return false // Received NOERROR with answers
+	return false // Received NOERROR with answers - vulnerable to rebinding
 }
 
+// checkResponseAccuracy checks if the DNS response is accurate by comparing the answer to an expected IP.
+// It verifies that at least one A record in the answer matches the expected IP address.
 func checkResponseAccuracy(result QueryResult, expectedIP string) bool {
 	if result.Error != nil || result.Response == nil || result.Response.Rcode != dns.RcodeSuccess {
-		return false
+		return false // Not accurate if error, no response, or not successful
 	}
 	// TODO: Handle multiple expected IPs if accuracy file format allows it.
 	for _, rr := range result.Response.Answer {
 		if aRecord, ok := rr.(*dns.A); ok {
 			if aRecord.A.String() == expectedIP {
-				return true
+				return true // Found matching A record
 			}
 		}
 		// TODO: Add check for AAAA records if needed/specified.
 	}
-	return false
+	return false // No matching A record found
 }

@@ -35,9 +35,9 @@ func TestGenerateUniqueDomain(t *testing.T) {
 
 func TestCalculateLatencyQueryCounts(t *testing.T) {
 	tests := []struct {
-		name        string
-		total       int
-		wantCached  int
+		name         string
+		total        int
+		wantCached   int
 		wantUncached int
 	}{
 		{"zero queries", 0, 0, 0},
@@ -349,7 +349,7 @@ func TestCheckNXDOMAINHijack(t *testing.T) {
 	req := new(dns.Msg)
 	req.SetQuestion(nxDomain, dns.TypeA)
 
-	respNXDOMAIN := createTestResponse(req, dns.RcodeNameError) // Correct NXDOMAIN
+	respNXDOMAIN := createTestResponse(req, dns.RcodeNameError)                                       // Correct NXDOMAIN
 	respHijacked := createTestResponse(req, dns.RcodeSuccess, createARecord(nxDomain, "192.0.2.100")) // Hijacked
 	respServFail := createTestResponse(req, dns.RcodeServerFailure)
 	respNoErrorNoAnswer := createTestResponse(req, dns.RcodeSuccess) // NOERROR but no answer section
@@ -381,7 +381,7 @@ func TestCheckRebindingProtection(t *testing.T) {
 	// Simulate responses - actual IP doesn't matter for the check logic, only presence of answer
 	respBlockedNX := createTestResponse(req, dns.RcodeNameError)
 	respBlockedRefused := createTestResponse(req, dns.RcodeRefused)
-	respBlockedNoErrorNoAnswer := createTestResponse(req, dns.RcodeSuccess) // NOERROR, no answer
+	respBlockedNoErrorNoAnswer := createTestResponse(req, dns.RcodeSuccess)                        // NOERROR, no answer
 	respAllowed := createTestResponse(req, dns.RcodeSuccess, createARecord(domain, "192.168.1.1")) // Allowed (returns answer)
 
 	tests := []struct {
@@ -505,7 +505,7 @@ func TestBenchmarker_runLatencyBenchmark(t *testing.T) {
 			{Latency: 12 * time.Millisecond, Response: &dns.Msg{}}, // Cached 2 OK
 		},
 		server2Info.String(): {
-			{Latency: 30 * time.Millisecond, Response: &dns.Msg{}}, // Cached 1 OK
+			{Latency: 30 * time.Millisecond, Response: &dns.Msg{}},       // Cached 1 OK
 			{Error: fmt.Errorf("query timed out after %v", cfg.Timeout)}, // Cached 2 Timeout
 		},
 	}
@@ -520,11 +520,10 @@ func TestBenchmarker_runLatencyBenchmark(t *testing.T) {
 		},
 	}
 
-
 	// --- Mocking ---
-	originalPerformQuery := PerformQueryFunc // Store original PerformQuery variable
+	originalPerformQuery := PerformQueryFunc                                    // Store original PerformQuery variable
 	PerformQueryFunc = mockPerformQuery(mockCachedResults, mockUncachedResults) // Use the improved mock
-	defer func() { PerformQueryFunc = originalPerformQuery }() // Restore
+	defer func() { PerformQueryFunc = originalPerformQuery }()                  // Restore
 
 	// --- Execution ---
 	benchmarker := NewBenchmarker(cfg)
@@ -582,57 +581,64 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	accuracyIP := "192.0.2.10"
 
 	cfg := &config.Config{
-		Servers:           []config.ServerInfo{server1Info, server2Info},
-		Timeout:           1 * time.Second,
-		Concurrency:       1, // Set concurrency to 1 for predictable mock call order
-		RateLimit:         0, // Unlimited
-		CheckDNSSEC:       true,
-		CheckNXDOMAIN:     true,
-		CheckRebinding:    true, // Use placeholder domain
-		AccuracyCheckFile: "dummy", // Enable check
+		Servers:             []config.ServerInfo{server1Info, server2Info},
+		Timeout:             1 * time.Second,
+		Concurrency:         1, // Set concurrency to 1 for predictable mock call order
+		RateLimit:           0, // Unlimited
+		CheckDNSSEC:         true,
+		CheckNXDOMAIN:       true,
+		CheckRebinding:      true,    // Use placeholder domain
+		AccuracyCheckFile:   "dummy", // Enable check
 		AccuracyCheckDomain: accuracyDomain,
-		AccuracyCheckIP:   accuracyIP,
-		CheckDotcom:       true,
-		Verbose:           false,
+		AccuracyCheckIP:     accuracyIP,
+		CheckDotcom:         true,
+		Verbose:             false,
 	}
 
 	// Prepare mock DNS messages for different checks
-	reqDNSSEC := &dns.Msg{}; reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
-	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess); respDNSSECOk.AuthenticatedData = true
-	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess); respDNSSECNo.AuthenticatedData = false
+	reqDNSSEC := &dns.Msg{}
+	reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
+	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
+	respDNSSECOk.AuthenticatedData = true
+	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
+	respDNSSECNo.AuthenticatedData = false
 
 	// We need unique NXDOMAINs per server if testing concurrently, but mock can handle it
-	reqNXDOMAIN := &dns.Msg{}; reqNXDOMAIN.SetQuestion("some-nxdomain.test.", dns.TypeA) // Domain doesn't matter for mock map key
+	reqNXDOMAIN := &dns.Msg{}
+	reqNXDOMAIN.SetQuestion("some-nxdomain.test.", dns.TypeA) // Domain doesn't matter for mock map key
 	respNXDOMAINOk := createTestResponse(reqNXDOMAIN, dns.RcodeNameError)
 	respNXDOMAINHijacked := createTestResponse(reqNXDOMAIN, dns.RcodeSuccess, createARecord("hijacked.test.", "1.2.3.4"))
 
-	reqRebinding := &dns.Msg{}; reqRebinding.SetQuestion(rebindingCheckDomain, dns.TypeA)
+	reqRebinding := &dns.Msg{}
+	reqRebinding.SetQuestion(rebindingCheckDomain, dns.TypeA)
 	respRebindingBlocked := createTestResponse(reqRebinding, dns.RcodeRefused)
 	respRebindingAllowed := createTestResponse(reqRebinding, dns.RcodeSuccess, createARecord(rebindingCheckDomain, "192.168.1.1"))
 
-	reqAccuracy := &dns.Msg{}; reqAccuracy.SetQuestion(accuracyDomain, dns.TypeA)
+	reqAccuracy := &dns.Msg{}
+	reqAccuracy.SetQuestion(accuracyDomain, dns.TypeA)
 	respAccuracyOk := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, accuracyIP))
 	respAccuracyWrong := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, "192.0.2.11"))
 
-	reqDotcom := &dns.Msg{}; reqDotcom.SetQuestion("some-dotcom.test.", dns.TypeA) // Domain doesn't matter for mock map key
+	reqDotcom := &dns.Msg{}
+	reqDotcom.SetQuestion("some-dotcom.test.", dns.TypeA) // Domain doesn't matter for mock map key
 	respDotcomOk := createTestResponse(reqDotcom, dns.RcodeSuccess)
 
 	// Define mock results - map key is server address, value is list of results IN THE ORDER CHECKS ARE ADDED
 	// Order: DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom
 	mockResults := map[string][]QueryResult{
 		server1Info.String(): {
-			{Response: respDNSSECOk},                               // DNSSEC OK
-			{Response: respNXDOMAINOk},                             // NXDOMAIN OK
-			{Response: respRebindingAllowed},                       // Rebinding Allowed
-			{Response: respAccuracyOk},                             // Accuracy OK
+			{Response: respDNSSECOk},                                 // DNSSEC OK
+			{Response: respNXDOMAINOk},                               // NXDOMAIN OK
+			{Response: respRebindingAllowed},                         // Rebinding Allowed
+			{Response: respAccuracyOk},                               // Accuracy OK
 			{Latency: 15 * time.Millisecond, Response: respDotcomOk}, // Dotcom OK
 		},
 		server2Info.String(): {
-			{Response: respDNSSECNo},                               // DNSSEC No
-			{Response: respNXDOMAINHijacked},                       // NXDOMAIN Hijacked
-			{Response: respRebindingBlocked},                       // Rebinding Blocked
-			{Response: respAccuracyWrong},                          // Accuracy Wrong
-			{Error: errors.New("dotcom failed")},                   // Dotcom Error
+			{Response: respDNSSECNo},             // DNSSEC No
+			{Response: respNXDOMAINHijacked},     // NXDOMAIN Hijacked
+			{Response: respRebindingBlocked},     // Rebinding Blocked
+			{Response: respAccuracyWrong},        // Accuracy Wrong
+			{Error: errors.New("dotcom failed")}, // Dotcom Error
 		},
 	}
 
@@ -647,14 +653,21 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 		count := queryCallCounts[key] // Get current count
 
 		// Determine check type for error message if needed (outside lock is fine)
- 		var checkType string
+		var checkType string
 		switch domain {
-		case dnssecCheckDomain: checkType = "dnssec"
-		case rebindingCheckDomain: checkType = "rebinding"
-		case accuracyDomain: checkType = "accuracy"
+		case dnssecCheckDomain:
+			checkType = "dnssec"
+		case rebindingCheckDomain:
+			checkType = "rebinding"
+		case accuracyDomain:
+			checkType = "accuracy"
 		default:
-			if strings.HasPrefix(domain, nxdomainCheckDomainPrefix) { checkType = "nxdomain" }
-			if strings.HasPrefix(domain, dotcomCheckPrefix) { checkType = "dotcom" }
+			if strings.HasPrefix(domain, nxdomainCheckDomainPrefix) {
+				checkType = "nxdomain"
+			}
+			if strings.HasPrefix(domain, dotcomCheckPrefix) {
+				checkType = "dotcom"
+			}
 		}
 
 		// Find the expected result based on the order checks are added in prepareCheckJobs
@@ -723,39 +736,46 @@ func TestBenchmarker_Run(t *testing.T) {
 	accuracyIP := "192.0.2.20"
 
 	cfg := &config.Config{
-		Servers:           []config.ServerInfo{server1Info, server2Info},
-		NumQueries:        2, // 1 cached, 1 uncached
-		Timeout:           1 * time.Second,
-		Concurrency:       1, // Simplify call order for mock
-		RateLimit:         0,
-		CheckDNSSEC:       true,
-		CheckNXDOMAIN:     true,
-		CheckRebinding:    false, // Disable rebinding for simplicity
-		AccuracyCheckFile: "dummy",
+		Servers:             []config.ServerInfo{server1Info, server2Info},
+		NumQueries:          2, // 1 cached, 1 uncached
+		Timeout:             1 * time.Second,
+		Concurrency:         1, // Simplify call order for mock
+		RateLimit:           0,
+		CheckDNSSEC:         true,
+		CheckNXDOMAIN:       true,
+		CheckRebinding:      false, // Disable rebinding for simplicity
+		AccuracyCheckFile:   "dummy",
 		AccuracyCheckDomain: accuracyDomain,
-		AccuracyCheckIP:   accuracyIP,
-		CheckDotcom:       true,
-		Verbose:           false,
+		AccuracyCheckIP:     accuracyIP,
+		CheckDotcom:         true,
+		Verbose:             false,
 	}
 
 	// Prepare mock DNS messages
-	reqCached := &dns.Msg{}; reqCached.SetQuestion(cfg.Domain, dns.TypeA)
-	reqUncached := &dns.Msg{}; reqUncached.SetQuestion("unique-uncached.", dns.TypeA) // Domain doesn't matter for mock
-	reqDNSSEC := &dns.Msg{}; reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
-	reqNXDOMAIN := &dns.Msg{}; reqNXDOMAIN.SetQuestion("unique-nxdomain.", dns.TypeA)
-	reqAccuracy := &dns.Msg{}; reqAccuracy.SetQuestion(accuracyDomain, dns.TypeA)
-	reqDotcom := &dns.Msg{}; reqDotcom.SetQuestion("unique-dotcom.", dns.TypeA)
+	reqCached := &dns.Msg{}
+	reqCached.SetQuestion(cfg.Domain, dns.TypeA)
+	reqUncached := &dns.Msg{}
+	reqUncached.SetQuestion("unique-uncached.", dns.TypeA) // Domain doesn't matter for mock
+	reqDNSSEC := &dns.Msg{}
+	reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
+	reqNXDOMAIN := &dns.Msg{}
+	reqNXDOMAIN.SetQuestion("unique-nxdomain.", dns.TypeA)
+	reqAccuracy := &dns.Msg{}
+	reqAccuracy.SetQuestion(accuracyDomain, dns.TypeA)
+	reqDotcom := &dns.Msg{}
+	reqDotcom.SetQuestion("unique-dotcom.", dns.TypeA)
 
 	respCachedOK := createTestResponse(reqCached, dns.RcodeSuccess)
 	respUncachedOK := createTestResponse(reqUncached, dns.RcodeSuccess)
-	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess); respDNSSECOk.AuthenticatedData = true
-	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess); respDNSSECNo.AuthenticatedData = false
+	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
+	respDNSSECOk.AuthenticatedData = true
+	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
+	respDNSSECNo.AuthenticatedData = false
 	respNXDOMAINOk := createTestResponse(reqNXDOMAIN, dns.RcodeNameError)
 	respNXDOMAINHijacked := createTestResponse(reqNXDOMAIN, dns.RcodeSuccess, createARecord("hijacked.test.", "1.2.3.4"))
 	respAccuracyOk := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, accuracyIP))
 	respAccuracyWrong := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, "192.0.2.21"))
 	respDotcomOk := createTestResponse(reqDotcom, dns.RcodeSuccess)
-
 
 	// Define mock results sequence for PerformQueryFunc
 	// Order per server: Cached Latency, Uncached Latency, DNSSEC Check, NXDOMAIN Check, Accuracy Check, Dotcom Check
@@ -769,12 +789,12 @@ func TestBenchmarker_Run(t *testing.T) {
 			{Latency: 15 * time.Millisecond, Response: respDotcomOk},   // Check Dotcom
 		},
 		server2Info.String(): {
-			{Latency: 15 * time.Millisecond, Response: respCachedOK},   // Latency Cached
-			{Error: errors.New("uncached failed")},                     // Latency Uncached Error
-			{Response: respDNSSECNo},                                   // Check DNSSEC
-			{Response: respNXDOMAINHijacked},                           // Check NXDOMAIN
-			{Response: respAccuracyWrong},                              // Check Accuracy
-			{Error: errors.New("dotcom failed")},                       // Check Dotcom Error
+			{Latency: 15 * time.Millisecond, Response: respCachedOK}, // Latency Cached
+			{Error: errors.New("uncached failed")},                   // Latency Uncached Error
+			{Response: respDNSSECNo},                                 // Check DNSSEC
+			{Response: respNXDOMAINHijacked},                         // Check NXDOMAIN
+			{Response: respAccuracyWrong},                            // Check Accuracy
+			{Error: errors.New("dotcom failed")},                     // Check Dotcom Error
 		},
 	}
 
@@ -833,7 +853,7 @@ func TestBenchmarker_Run(t *testing.T) {
 	require.Len(t, res2.CachedLatencies, 1, "Server 2 CachedLatencies count")
 	assert.Equal(t, 15*time.Millisecond, res2.CachedLatencies[0], "Server 2 CachedLatency")
 	require.Len(t, res2.UncachedLatencies, 0, "Server 2 UncachedLatencies count") // Failed
-	assert.Equal(t, 1, res2.Errors, "Server 2 Errors") // 1 latency error
+	assert.Equal(t, 1, res2.Errors, "Server 2 Errors")                            // 1 latency error
 	// Check results
 	require.NotNil(t, res2.SupportsDNSSEC, "Server 2 DNSSEC nil")
 	assert.False(t, *res2.SupportsDNSSEC, "Server 2 DNSSEC")
@@ -845,8 +865,6 @@ func TestBenchmarker_Run(t *testing.T) {
 	assert.Nil(t, res2.DotcomLatency, "Server 2 Dotcom should be nil (check failed)")
 
 }
-
-// TODO: Add tests for queryWorker (might be implicitly tested via benchmark methods)
 
 // --- Testing PerformQuery Dispatcher ---
 

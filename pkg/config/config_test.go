@@ -73,28 +73,14 @@ func TestParseServerString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Capture stderr for warnings (optional, but good for debugging)
-			// oldStderr := os.Stderr
-			// r, w, _ := os.Pipe()
-			// os.Stderr = w
-
 			got, err := parseServerString(tt.serverStr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseServerString() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			// Clear Hostname if it's an IP for comparison simplicity where Hostname isn't strictly needed by protocol logic (UDP/TCP)
-			// if (got.Protocol == UDP || got.Protocol == TCP) && net.ParseIP(got.Hostname) != nil {
-			// 	// Keep hostname for consistency, tests above check it's derived correctly
-			// }
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseServerString() got = %#v, want %#v", got, tt.want) // Use %#v for more detail
+				t.Errorf("parseServerString() got = %#v, want %#v", got, tt.want)
 			}
-
-			// w.Close()
-			// stderrOutput, _ := io.ReadAll(r)
-			// os.Stderr = oldStderr
-			// // Optionally assert stderrOutput contains expected warnings for specific cases
 		})
 	}
 }
@@ -255,17 +241,7 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Capture stderr warnings for invalid entries if needed (optional)
-			// oldStderr := os.Stderr
-			// r, w, _ := os.Pipe()
-			// os.Stderr = w
-			// defer func() { os.Stderr = oldStderr }()
-
 			got := parseAndDeduplicateServers(tt.serverStrings)
-
-			// w.Close()
-			// stderrOutput, _ := io.ReadAll(r)
-			// Check stderrOutput if necessary
 
 			// Sort both slices for consistent comparison as order isn't guaranteed
 			sortServerInfos(got)
@@ -278,9 +254,9 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 	}
 }
 
-// Helper to sort ServerInfo slices for comparison
+// Helper to sort ServerInfo slices for comparison.
 func sortServerInfos(infos []ServerInfo) {
-	sort.Slice(infos, func(i, j int) bool { // Ensure sort is imported
+	sort.Slice(infos, func(i, j int) bool {
 		return infos[i].String() < infos[j].String()
 	})
 }
@@ -380,17 +356,7 @@ func TestLoadAccuracyCheckFile(t *testing.T) {
 				defer os.Remove(filePath)
 			}
 
-			// Capture stderr warnings (optional)
-			// oldStderr := os.Stderr
-			// r, w, _ := os.Pipe()
-			// os.Stderr = w
-			// defer func() { os.Stderr = oldStderr }()
-
 			gotDomain, gotIP, err := loadAccuracyCheckFile(filePath)
-
-			// w.Close()
-			// stderrOutput, _ := io.ReadAll(r)
-			// Check stderrOutput if necessary
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("loadAccuracyCheckFile() error = %v, wantErr %v", err, tt.wantErr)
@@ -513,17 +479,9 @@ func TestGetSystemDNSServers_Unix(t *testing.T) {
 			}
 
 			// *** This is the problematic part if the path is hardcoded ***
-			// If getSystemDNSServers uses a variable:
-			// realGetSystemDNSServers := getSystemDNSServers // Store original
-			// getSystemDNSServers = func() ([]string, error) { // Override
-			//     return readResolvConf(resolvPath) // Call helper with temp path
-			// }
-			// defer func() { getSystemDNSServers = realGetSystemDNSServers }() // Restore
-
 			// Assuming getSystemDNSServers can be tested by reading a specific file path
 			// or that we can temporarily replace the function (less ideal).
-			// For this example, let's simulate by calling a helper if it existed:
-			// got, err := readResolvConf(resolvPath) // Hypothetical helper
+			// For this example, let's simulate by calling a helper if it existed.
 
 			// Since we can't easily mock os.Open or change the hardcoded path without
 			// significant refactoring or external libraries, we'll test the logic
@@ -533,7 +491,7 @@ func TestGetSystemDNSServers_Unix(t *testing.T) {
 			// --- Simplified Check (assuming regex works) ---
 			// This part simulates what would happen *if* the file was read correctly.
 			var simulatedGot []string
-			scanner := bufio.NewScanner(strings.NewReader(tt.content)) // Ensure bufio is imported
+			scanner := bufio.NewScanner(strings.NewReader(tt.content))
 			for scanner.Scan() {
 				match := resolvConfNameserverRegex.FindStringSubmatch(scanner.Text())
 				if len(match) == 2 {
@@ -554,7 +512,6 @@ func TestGetSystemDNSServers_Unix(t *testing.T) {
 				// This indicates a mismatch between the test case expectation
 				// and what the simulation predicts based *only* on content.
 				// It doesn't test the actual file opening part of getSystemDNSServers.
-				// t.Logf("Simulated error status mismatch for %q", tt.name)
 			}
 			if !reflect.DeepEqual(simulatedGot, tt.want) {
 				t.Errorf("getSystemDNSServers() simulated got = %v, want %v", simulatedGot, tt.want)

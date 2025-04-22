@@ -26,7 +26,6 @@ const (
 )
 
 // ServerInfo holds details about a DNS server endpoint.
-// Represents DNS server configuration details.
 type ServerInfo struct {
 	Address  string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
 	Protocol ProtocolType
@@ -120,7 +119,6 @@ var DefaultDNSStrings = []string{
 func LoadConfig() *Config {
 	cfg := &Config{}
 
-	// Define flags
 	flag.StringVar(&cfg.ServersFile, "f", "", "Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)")
 	flag.IntVar(&cfg.NumQueries, "n", 4, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
@@ -246,7 +244,9 @@ func readServerStringsFromFile(filePath string) ([]string, error) {
 	return servers, nil
 }
 
-// isValidHostname checks if a string is a potentially valid hostname (basic check).
+// isValidHostname performs a basic validation of a hostname string.
+// It checks for general validity but does not guarantee DNS resolvability.
+// Allows IPv4/IPv6 addresses, and hostnames according to RFC 1123/253.
 func isValidHostname(hostname string) bool {
 	if hostname == "" {
 		return false
@@ -279,7 +279,7 @@ func isValidHostname(hostname string) bool {
 			return false
 		} // Empty label or label too long
 		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
+			return false // Invalid label start/end
 		}
 		for _, r := range label {
 			isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
@@ -293,7 +293,10 @@ func isValidHostname(hostname string) bool {
 	return true
 }
 
-// parseServerString parses a string endpoint into a ServerInfo struct, handling various protocols and formats.
+// parseServerString parses a server endpoint string into a ServerInfo struct.
+// It handles various formats including IP:port, Host:port, and URLs for DoH.
+// It detects the protocol (UDP, TCP, DoT, DoH, DoQ) from the string prefix or scheme.
+// Returns an error if the string is invalid or format is unrecognized.
 func parseServerString(serverStr string) (ServerInfo, error) {
 	serverStr = strings.TrimSpace(serverStr)
 	if serverStr == "" {
@@ -407,12 +410,14 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 	return ServerInfo{Address: finalAddr, Protocol: protocol, Hostname: hostname}, nil
 }
 
-// parseAndDeduplicateServers parses string endpoints and removes duplicates.
+// parseAndDeduplicateServers parses a list of server endpoint strings,
+// converts them to ServerInfo structs, and removes duplicate entries.
+// Deduplication is based on the String() representation of ServerInfo.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	seen := make(map[string]struct{})
 	var result []ServerInfo
 	for _, s := range serverStrings {
-		info, err := parseServerString(s) // Use the updated parsing logic
+		info, err := parseServerString(s)
 		if err != nil {
 			// Log the error and skip this server string entirely if parsing failed
 			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid server endpoint '%s': %v\n", s, err)
@@ -427,7 +432,10 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	return result
 }
 
-// getSystemDNSServers attempts to read system DNS servers (returns IPs only for UDP).
+// getSystemDNSServers attempts to retrieve system DNS resolver addresses.
+// It currently supports Unix-like systems by reading /etc/resolv.conf.
+// On Windows and if detection fails, it returns an error and an empty list.
+// The returned server addresses are intended for UDP queries.
 func getSystemDNSServers() ([]string, error) {
 	// TODO: Implement system DNS detection for Windows (e.g., using registry or PowerShell).
 	// TODO: Consider supporting non-UDP system resolvers if OS provides such info (e.g., DoH URL in some systems).
@@ -462,7 +470,9 @@ func getSystemDNSServers() ([]string, error) {
 	return servers, nil
 }
 
-// loadAccuracyCheckFile reads a file with 'domain IP' per line and returns the first valid pair.
+// loadAccuracyCheckFile reads an accuracy check file to get a domain and expected IP.
+// The file should have lines of 'domain IP', and the first valid entry is used.
+// Invalid lines or IPs are skipped with warnings. Returns error if no valid entry is found.
 func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error) {
 	file, err := os.Open(filePath)
 	if err != nil {

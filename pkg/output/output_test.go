@@ -477,5 +477,4 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.Nil(t, res3.IsAccurate)
 }
 
-// TODO: Add tests for sorting logic specifically (sortServerResults)
-// TODO: Add tests for summary logic specifically (findBestServer, printServerWarnings)
+// --- Additional tests ---
