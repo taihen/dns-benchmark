@@ -223,7 +223,9 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 			serverStrings: []string{"1.1.1.1", "invalid-entry", "tls://9.9.9.9", "https://:badurl:", "8.8.8.8"},
 			want: []ServerInfo{
 				{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
+				// invalid-entry now returns error and is skipped
 				{Address: "9.9.9.9:853", Protocol: DOT, Hostname: "9.9.9.9"},
+				// badurl returns error and is skipped
 				{Address: "8.8.8.8:53", Protocol: UDP, Hostname: "8.8.8.8"},
 			},
 		},
@@ -240,6 +242,7 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := parseAndDeduplicateServers(tt.serverStrings)
+			// Sort both slices for consistent comparison as order isn't guaranteed
 			sortServerInfos(got)
 			sortServerInfos(tt.want)
 			if !reflect.DeepEqual(got, tt.want) {
