@@ -196,7 +196,7 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 		{
 			name:          "empty list",
 			serverStrings: []string{},
-			want:          []ServerInfo{}, // Correctly expect initialized empty slice
+			want:          []ServerInfo{},
 		},
 		{
 			name:          "no duplicates",
@@ -242,11 +242,9 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := parseAndDeduplicateServers(tt.serverStrings)
-
 			// Sort both slices for consistent comparison as order isn't guaranteed
 			sortServerInfos(got)
 			sortServerInfos(tt.want)
-
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseAndDeduplicateServers() got = %v, want %v", got, tt.want)
 			}
