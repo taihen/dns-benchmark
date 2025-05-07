@@ -6,6 +6,8 @@
 
 This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable recursive DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
+Visit [taihen.org](https://taihen.org) for introductory [announcement](https://taihen.org/posts/dns_benchmarking/).
+
 > [!WARNING]
 > **Ethical Querying:** This tool implements safe querying practices (rate limiting, controlled concurrency) to avoid abusing public DNS services. Please use it responsively.
 
