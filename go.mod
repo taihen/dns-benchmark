@@ -6,7 +6,7 @@ require (
 	github.com/miekg/dns v1.1.66
 	github.com/quic-go/quic-go v0.52.0
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/time v0.11.0
+	golang.org/x/time v0.12.0
 )
 
 require (
