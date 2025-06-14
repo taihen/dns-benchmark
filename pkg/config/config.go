@@ -121,9 +121,9 @@ func LoadConfig() *Config {
 	cfg := &Config{}
 
 	flag.StringVar(&cfg.ServersFile, "f", "", "Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)")
-	flag.IntVar(&cfg.NumQueries, "n", 4, "Number of latency queries per server (min 2 for stddev)")
+	flag.IntVar(&cfg.NumQueries, "n", 10, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
-	flag.IntVar(&cfg.Concurrency, "c", 4, "Max concurrent queries/checks")
+	flag.IntVar(&cfg.Concurrency, "c", 5, "Max concurrent queries/checks")
 	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
 	flag.StringVar(&cfg.QueryType, "type", "A", "DNS record type for latency queries")
 	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for cached latency test")
