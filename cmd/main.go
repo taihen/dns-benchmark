@@ -15,14 +15,11 @@ import (
 var version = "dev" // Will be overridden during build
 
 func main() {
-	// Explicitly use a type from the analysis package to satisfy the compiler
-	_ = analysis.BenchmarkResults{}
-
 	// Load configuration from flags, environment, and potentially config files
 	cfg := config.LoadConfig()
 
 	// Display version if requested
-	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
+	if cfg.ShowVersion {
 		fmt.Printf("dns-benchmark version %s\n", version)
 		os.Exit(0)
 	}
@@ -31,7 +28,7 @@ func main() {
 	fmt.Printf("DNS Benchmark %s\n", version) // Removed 'v' prefix here
 	fmt.Println("Running benchmark...")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
-	results := benchmarker.Run()
+	var results *analysis.BenchmarkResults = benchmarker.Run()
 	fmt.Println("Benchmark finished.")
 	fmt.Println("---")
 

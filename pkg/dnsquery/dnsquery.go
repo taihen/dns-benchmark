@@ -55,7 +55,7 @@ type QueryResult struct {
 
 // quicConnection represents a pooled QUIC connection
 type quicConnection struct {
-	session   interface{} // Store as interface{} to work with any QUIC connection type
+	session   quic.Connection
 	lastUsed  time.Time
 	createdAt time.Time
 	inUse     bool
@@ -113,10 +113,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 			   (now.Sub(conn.createdAt) > connectionTTL || 
 			    now.Sub(conn.lastUsed) > maxIdleTime) {
 				if conn.session != nil {
-					// Try to close the connection - use type assertion to call the method
-					if closer, ok := conn.session.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
-						closer.CloseWithError(0, "cleanup")
-					}
+					conn.session.CloseWithError(0, "cleanup")
 				}
 				continue
 			}
@@ -132,7 +129,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 }
 
 // getConnection retrieves or creates a QUIC connection for the server
-func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (interface{}, error) {
+func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (quic.Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	
@@ -141,20 +138,12 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 		for _, conn := range conns {
 			// Check if connection is still valid and not in use
 			if !conn.inUse {
-				// Try to check if connection context is done
-				if contextGetter, ok := conn.session.(interface{ Context() context.Context }); ok {
-					select {
-					case <-contextGetter.Context().Done():
-						// Connection is closed, remove it
-						continue
-					default:
-						// Connection is still valid, mark as in use
-						conn.inUse = true
-						conn.lastUsed = time.Now()
-						return conn.session, nil
-					}
-				} else {
-					// If we can't check context, assume it's still valid
+				select {
+				case <-conn.session.Context().Done():
+					// Connection is closed, remove it
+					continue
+				default:
+					// Connection is still valid, mark as in use
 					conn.inUse = true
 					conn.lastUsed = time.Now()
 					return conn.session, nil
@@ -193,7 +182,7 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 }
 
 // returnConnection marks a connection as available for reuse
-func (p *quicConnectionPool) returnConnection(serverAddr string, session interface{}) {
+func (p *quicConnectionPool) returnConnection(serverAddr string, session quic.Connection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	
@@ -216,10 +205,7 @@ func (p *quicConnectionPool) closeAllConnections() {
 	for _, conns := range p.connections {
 		for _, conn := range conns {
 			if conn.session != nil {
-				// Try to close the connection - use type assertion to call the method
-				if closer, ok := conn.session.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
-					closer.CloseWithError(0, "shutdown")
-				}
+				conn.session.CloseWithError(0, "shutdown")
 			}
 		}
 	}
@@ -372,12 +358,8 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	// Return connection to pool when done
 	defer globalQuicPool.returnConnection(serverInfo.Address, session)
 
-	// Open stream - use type assertion to call the method
-	streamOpener, ok := session.(interface{ OpenStreamSync(context.Context) (quic.Stream, error) })
-	if !ok {
-		return QueryResult{Error: fmt.Errorf("doq session does not support OpenStreamSync")}
-	}
-	stream, err := streamOpener.OpenStreamSync(ctx)
+	// Open stream
+	stream, err := session.OpenStreamSync(ctx)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)}
 	}
