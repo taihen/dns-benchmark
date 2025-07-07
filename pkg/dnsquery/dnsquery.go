@@ -55,7 +55,7 @@ type QueryResult struct {
 
 // quicConnection represents a pooled QUIC connection
 type quicConnection struct {
-	session   quic.Connection
+	session   quic.EarlyConnection
 	lastUsed  time.Time
 	createdAt time.Time
 	inUse     bool
@@ -129,7 +129,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 }
 
 // getConnection retrieves or creates a QUIC connection for the server
-func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (quic.Connection, error) {
+func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (quic.EarlyConnection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	
@@ -182,7 +182,7 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 }
 
 // returnConnection marks a connection as available for reuse
-func (p *quicConnectionPool) returnConnection(serverAddr string, session quic.Connection) {
+func (p *quicConnectionPool) returnConnection(serverAddr string, session quic.EarlyConnection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	
