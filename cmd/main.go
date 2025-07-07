@@ -68,6 +68,8 @@ func main() {
 	// Handle potential errors during file writing for CSV/JSON
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s output: %v\n", format, err)
+		// Cleanup QUIC connection pool before exit
+		dnsquery.CleanupQuicPool()
 		// Attempt to remove partially written file? Maybe not necessary.
 		os.Exit(1)
 	}
@@ -76,6 +78,9 @@ func main() {
 	if outputWriter != os.Stdout {
 		fmt.Println("Done.")
 	}
+
+	// Cleanup QUIC connection pool before exit
+	dnsquery.CleanupQuicPool()
 
 	os.Exit(0) // Exit successfully
 }
