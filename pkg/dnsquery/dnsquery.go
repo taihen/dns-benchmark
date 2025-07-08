@@ -39,6 +39,11 @@ const (
 	dotcomCheckPrefix         = "dnsbench-dotcom-"
 	dotcomCheckSuffix         = ".com."
 	dohUserAgent              = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
+	
+	// QUIC connection pool configuration
+	maxPooledConnections = 10
+	connectionTTL        = 30 * time.Second
+	maxIdleTime          = 15 * time.Second
 )
 
 // QueryResult holds the result of a single DNS query.
@@ -46,6 +51,190 @@ type QueryResult struct {
 	Latency  time.Duration
 	Response *dns.Msg
 	Error    error
+}
+
+// quicConnection represents a pooled QUIC connection
+type quicConnection struct {
+	session   interface{} // Store as interface{} to work with any QUIC connection type
+	lastUsed  time.Time
+	createdAt time.Time
+	inUse     bool
+}
+
+// quicConnectionPool manages QUIC connections for DoQ queries
+type quicConnectionPool struct {
+	mu          sync.RWMutex
+	connections map[string][]*quicConnection // key: serverAddress
+	cleanup     chan struct{}
+	cleanupDone chan struct{}
+}
+
+// Global connection pool instance
+var globalQuicPool = &quicConnectionPool{
+	connections: make(map[string][]*quicConnection),
+	cleanup:     make(chan struct{}),
+	cleanupDone: make(chan struct{}),
+}
+
+// Initialize the cleanup goroutine
+func init() {
+	go globalQuicPool.startCleanup()
+}
+
+// startCleanup runs the cleanup goroutine that removes stale connections
+func (p *quicConnectionPool) startCleanup() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			p.cleanupStaleConnections()
+		case <-p.cleanup:
+			p.closeAllConnections()
+			close(p.cleanupDone)
+			return
+		}
+	}
+}
+
+// cleanupStaleConnections removes expired and idle connections
+func (p *quicConnectionPool) cleanupStaleConnections() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	now := time.Now()
+	for serverAddr, conns := range p.connections {
+		var activeConns []*quicConnection
+		
+		for _, conn := range conns {
+			// Remove connections that are too old or have been idle too long
+			if !conn.inUse && 
+			   (now.Sub(conn.createdAt) > connectionTTL || 
+			    now.Sub(conn.lastUsed) > maxIdleTime) {
+				if conn.session != nil {
+					// Try to close the connection - use type assertion to call the method
+					if closer, ok := conn.session.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
+						closer.CloseWithError(0, "cleanup")
+					}
+				}
+				continue
+			}
+			activeConns = append(activeConns, conn)
+		}
+		
+		if len(activeConns) == 0 {
+			delete(p.connections, serverAddr)
+		} else {
+			p.connections[serverAddr] = activeConns
+		}
+	}
+}
+
+// getConnection retrieves or creates a QUIC connection for the server
+func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (interface{}, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	// Look for an available connection
+	if conns, exists := p.connections[serverAddr]; exists {
+		for _, conn := range conns {
+			// Check if connection is still valid and not in use
+			if !conn.inUse {
+				// Try to check if connection context is done
+				if contextGetter, ok := conn.session.(interface{ Context() context.Context }); ok {
+					select {
+					case <-contextGetter.Context().Done():
+						// Connection is closed, remove it
+						continue
+					default:
+						// Connection is still valid, mark as in use
+						conn.inUse = true
+						conn.lastUsed = time.Now()
+						return conn.session, nil
+					}
+				} else {
+					// If we can't check context, assume it's still valid
+					conn.inUse = true
+					conn.lastUsed = time.Now()
+					return conn.session, nil
+				}
+			}
+		}
+	}
+	
+	// No available connection, create a new one if under limit
+	if conns := p.connections[serverAddr]; len(conns) >= maxPooledConnections {
+		// Pool is full, create a temporary connection (not pooled)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
+	}
+	
+	// Create new connection
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	session, err := quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Add to pool
+	conn := &quicConnection{
+		session:   session,
+		lastUsed:  time.Now(),
+		createdAt: time.Now(),
+		inUse:     true,
+	}
+	
+	p.connections[serverAddr] = append(p.connections[serverAddr], conn)
+	return session, nil
+}
+
+// returnConnection marks a connection as available for reuse
+func (p *quicConnectionPool) returnConnection(serverAddr string, session interface{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	if conns, exists := p.connections[serverAddr]; exists {
+		for _, conn := range conns {
+			if conn.session == session {
+				conn.inUse = false
+				conn.lastUsed = time.Now()
+				return
+			}
+		}
+	}
+}
+
+// closeAllConnections closes all pooled connections
+func (p *quicConnectionPool) closeAllConnections() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	for _, conns := range p.connections {
+		for _, conn := range conns {
+			if conn.session != nil {
+				// Try to close the connection - use type assertion to call the method
+				if closer, ok := conn.session.(interface{ CloseWithError(quic.ApplicationErrorCode, string) error }); ok {
+					closer.CloseWithError(0, "shutdown")
+				}
+			}
+		}
+	}
+	p.connections = make(map[string][]*quicConnection)
+}
+
+// shutdownPool gracefully shuts down the connection pool
+func (p *quicConnectionPool) shutdownPool() {
+	close(p.cleanup)
+	<-p.cleanupDone
+}
+
+// CleanupQuicPool gracefully shuts down the global QUIC connection pool
+func CleanupQuicPool() {
+	globalQuicPool.shutdownPool()
 }
 
 // performQueryWithClient performs a DNS query using a provided dns.Client.
@@ -153,7 +342,7 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 }
 
 // performDoQQuery performs a DNS query over QUIC (DoQ).
-// It sets up a QUIC connection, sends the DNS query, and reads the response.
+// It uses connection pooling to reuse QUIC sessions for better performance.
 func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
@@ -174,16 +363,21 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Dial QUIC connection
-	// TODO: Consider reusing QUIC sessions for multiple queries to the same server if performance is critical.
-	session, err := quic.DialAddrEarly(ctx, serverInfo.Address, tlsConfig, nil)
+	// Get QUIC connection from pool
+	session, err := globalQuicPool.getConnection(serverInfo.Address, tlsConfig)
 	if err != nil {
-		return QueryResult{Error: fmt.Errorf("doq failed to dial %s: %w", serverInfo.Address, err)}
+		return QueryResult{Error: fmt.Errorf("doq failed to get connection for %s: %w", serverInfo.Address, err)}
 	}
-	defer session.CloseWithError(0, "")
+	
+	// Return connection to pool when done
+	defer globalQuicPool.returnConnection(serverInfo.Address, session)
 
-	// Open stream
-	stream, err := session.OpenStreamSync(ctx)
+	// Open stream - use type assertion to call the method
+	streamOpener, ok := session.(interface{ OpenStreamSync(context.Context) (quic.Stream, error) })
+	if !ok {
+		return QueryResult{Error: fmt.Errorf("doq session does not support OpenStreamSync")}
+	}
+	stream, err := streamOpener.OpenStreamSync(ctx)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)}
 	}
@@ -198,16 +392,26 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 	// Read response length prefix
 	lenBuf := make([]byte, 2)
-	if _, err = io.ReadFull(stream, lenBuf); err != nil {
+	if _, err = stream.Read(lenBuf); err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to read length prefix: %w", err)}
 	}
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 
+	// Add protection against excessively large response lengths
+	const maxResponseSize = 64 * 1024 // 64KB limit
+	if respLen > maxResponseSize {
+		return QueryResult{Error: fmt.Errorf("doq response too large: %d bytes (max %d)", respLen, maxResponseSize)}
+	}
+
 	// Read response body
-	// TODO: Add protection against excessively large response lengths?
 	respBuf := make([]byte, respLen)
-	if _, err = io.ReadFull(stream, respBuf); err != nil {
-		return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
+	totalRead := 0
+	for totalRead < respLen {
+		n, err := stream.Read(respBuf[totalRead:])
+		if err != nil {
+			return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
+		}
+		totalRead += n
 	}
 	latency := time.Since(startTime)
 
