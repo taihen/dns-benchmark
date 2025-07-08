@@ -381,7 +381,7 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 	// Read response length prefix
 	lenBuf := make([]byte, 2)
-	if _, err = io.ReadFull(stream, lenBuf); err != nil {
+	if _, err = stream.Read(lenBuf); err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to read length prefix: %w", err)}
 	}
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
@@ -394,8 +394,13 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 	// Read response body
 	respBuf := make([]byte, respLen)
-	if _, err = io.ReadFull(stream, respBuf); err != nil {
-		return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
+	totalRead := 0
+	for totalRead < respLen {
+		n, err := stream.Read(respBuf[totalRead:])
+		if err != nil {
+			return QueryResult{Error: fmt.Errorf("doq failed to read response body: %w", err)}
+		}
+		totalRead += n
 	}
 	latency := time.Since(startTime)
 
