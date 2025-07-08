@@ -940,3 +940,87 @@ func TestPerformQuery_Dispatcher(t *testing.T) {
 		})
 	}
 }
+
+// --- Testing QUIC Connection Pool ---
+
+func TestQuicConnectionPool(t *testing.T) {
+	// Create a test pool
+	testPool := &quicConnectionPool{
+		connections: make(map[string][]*quicConnection),
+		cleanup:     make(chan struct{}),
+		cleanupDone: make(chan struct{}),
+	}
+
+	t.Run("connection pool basic operations", func(t *testing.T) {
+		serverAddr := "test.example.com:853"
+
+		// Test that connections are properly tracked
+		testPool.mu.Lock()
+		assert.Empty(t, testPool.connections)
+		testPool.mu.Unlock()
+
+		// Test returnConnection with non-existent connection
+		testPool.returnConnection(serverAddr, nil)
+		
+		// Verify still empty after invalid return
+		testPool.mu.Lock()
+		assert.Empty(t, testPool.connections)
+		testPool.mu.Unlock()
+	})
+
+	t.Run("cleanup stale connections", func(t *testing.T) {
+		serverAddr := "test2.example.com:853"
+		
+		// Add a mock old connection
+		testPool.mu.Lock()
+		mockConn := &quicConnection{
+			session:   nil, // Mock session - won't be used in cleanup test
+			lastUsed:  time.Now().Add(-1 * time.Hour), // Very old
+			createdAt: time.Now().Add(-2 * time.Hour), // Very old
+			inUse:     false,
+		}
+		testPool.connections[serverAddr] = []*quicConnection{mockConn}
+		testPool.mu.Unlock()
+
+		// Run cleanup
+		testPool.cleanupStaleConnections()
+
+		// Verify old connection was removed
+		testPool.mu.Lock()
+		assert.Empty(t, testPool.connections[serverAddr])
+		testPool.mu.Unlock()
+	})
+
+	t.Run("shutdown pool", func(t *testing.T) {
+		// Create a separate test pool for shutdown test
+		shutdownTestPool := &quicConnectionPool{
+			connections: make(map[string][]*quicConnection),
+			cleanup:     make(chan struct{}),
+			cleanupDone: make(chan struct{}),
+		}
+
+		// Start cleanup goroutine to simulate running state
+		go shutdownTestPool.startCleanup()
+
+		// This should complete without hanging
+		done := make(chan bool)
+		go func() {
+			shutdownTestPool.shutdownPool()
+			done <- true
+		}()
+
+		select {
+		case <-done:
+			// Success
+		case <-time.After(5 * time.Second):
+			t.Fatal("Pool shutdown timed out")
+		}
+	})
+}
+
+func TestQuicPoolCleanup(t *testing.T) {
+	// Test the exported cleanup function exists and doesn't panic
+	assert.NotPanics(t, func() {
+		CleanupQuicPool()
+	})
+}
