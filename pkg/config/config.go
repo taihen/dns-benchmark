@@ -89,6 +89,7 @@ type Config struct {
 	AccuracyCheckDomain string
 	AccuracyCheckIP     string
 	CheckDotcom         bool
+	ShowVersion         bool
 }
 
 // DefaultDNSStrings provides a list of common public DNS endpoints.
@@ -136,6 +137,7 @@ func LoadConfig() *Config {
 	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (CSV/JSON)")
 	flag.StringVar(&cfg.OutputFormat, "format", "console", "Output format (console, csv, json)")
 	flag.BoolVar(&cfg.IncludeSystemDNS, "system", true, "Include system DNS servers (UDP only)")
+	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 
 	flag.Parse()
 

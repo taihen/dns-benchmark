@@ -30,7 +30,7 @@ func TestParseServerString(t *testing.T) {
 		// TCP Cases
 		{"tcp ip only", "tcp://1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"}, false},
 		{"tcp ip with port", "tcp://8.8.8.8:53", ServerInfo{Address: "8.8.8.8:53", Protocol: TCP, Hostname: "8.8.8.8"}, false},
-		{"tcp ipv6", "tcp://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:53", Protocol: TCP, Hostname: "2606:4700:4700::1111"}, false}, // Expect correct parsing
+		{"tcp ipv6", "tcp://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:53", Protocol: TCP, Hostname: "2606:4700:4700::1111"}, false},              // Expect correct parsing
 		{"tcp ipv6 with port", "tcp://[2001:4860:4860::8888]:53", ServerInfo{Address: "[2001:4860:4860::8888]:53", Protocol: TCP, Hostname: "2001:4860:4860::8888"}, false}, // Expect correct parsing
 		{"tcp hostname", "tcp://dns.google", ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"}, false},
 		{"tcp hostname with port", "tcp://dns.google:53", ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"}, false},
@@ -38,7 +38,7 @@ func TestParseServerString(t *testing.T) {
 		// DoT Cases
 		{"dot ip only", "tls://1.1.1.1", ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"}, false},
 		{"dot ip with port", "tls://8.8.8.8:853", ServerInfo{Address: "8.8.8.8:853", Protocol: DOT, Hostname: "8.8.8.8"}, false},
-		{"dot ipv6", "tls://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:853", Protocol: DOT, Hostname: "2606:4700:4700::1111"}, false}, // Expect correct parsing
+		{"dot ipv6", "tls://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:853", Protocol: DOT, Hostname: "2606:4700:4700::1111"}, false},               // Expect correct parsing
 		{"dot ipv6 with port", "tls://[2001:4860:4860::8888]:853", ServerInfo{Address: "[2001:4860:4860::8888]:853", Protocol: DOT, Hostname: "2001:4860:4860::8888"}, false}, // Expect correct parsing
 		{"dot hostname", "tls://dns.google", ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"}, false},
 		{"dot hostname with port", "tls://dns.google:853", ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"}, false},
@@ -49,7 +49,7 @@ func TestParseServerString(t *testing.T) {
 		{"doh google", "https://dns.google/dns-query", ServerInfo{Address: "https://dns.google/dns-query", Protocol: DOH, Hostname: "dns.google", DoHPath: "/dns-query"}, false},
 		{"doh with ip", "https://1.1.1.1/dns-query", ServerInfo{Address: "https://1.1.1.1/dns-query", Protocol: DOH, Hostname: "1.1.1.1", DoHPath: "/dns-query"}, false},
 		{"doh no path", "https://dns.quad9.net", ServerInfo{Address: "https://dns.quad9.net", Protocol: DOH, Hostname: "dns.quad9.net", DoHPath: ""}, false},
-		{"doh invalid url", "https://:invalid:", ServerInfo{}, true}, // Expect error
+		{"doh invalid url", "https://:invalid:", ServerInfo{}, true},                    // Expect error
 		{"doh wrong scheme", "http://cloudflare-dns.com/dns-query", ServerInfo{}, true}, // Expect error
 
 		// DoQ Cases
@@ -57,19 +57,19 @@ func TestParseServerString(t *testing.T) {
 		{"doq hostname with port", "quic://dns.adguard-dns.com:784", ServerInfo{Address: "dns.adguard-dns.com:784", Protocol: DOQ, Hostname: "dns.adguard-dns.com"}, false},
 		{"doq ip", "quic://94.140.14.14", ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"}, false},
 		{"doq ip with port", "quic://94.140.14.14:853", ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"}, false},
-		{"doq ipv6", "quic://[2a10:50c0::ad1:ff]", ServerInfo{Address: "[2a10:50c0::ad1:ff]:853", Protocol: DOQ, Hostname: "2a10:50c0::ad1:ff"}, false}, // Expect correct parsing
+		{"doq ipv6", "quic://[2a10:50c0::ad1:ff]", ServerInfo{Address: "[2a10:50c0::ad1:ff]:853", Protocol: DOQ, Hostname: "2a10:50c0::ad1:ff"}, false},               // Expect correct parsing
 		{"doq ipv6 with port", "quic://[2a10:50c0::ad2:ff]:784", ServerInfo{Address: "[2a10:50c0::ad2:ff]:784", Protocol: DOQ, Hostname: "2a10:50c0::ad2:ff"}, false}, // Expect correct parsing
 
 		// Edge Cases
-		{"empty string", "", ServerInfo{}, true}, // Now returns error
+		{"empty string", "", ServerInfo{}, true},       // Now returns error
 		{"whitespace only", "   ", ServerInfo{}, true}, // Now returns error
-		{"invalid prefix", "invalid://1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false}, // Expect UDP fallback
-		{"udp with bad port", "1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false}, // Expect salvaged host, default port
-		{"tcp with bad port", "tcp://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"}, false}, // Expect salvaged host, default port
-		{"dot with bad port", "tls://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"}, false}, // Expect salvaged host, default port
+		{"invalid prefix", "invalid://1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false},      // Expect UDP fallback
+		{"udp with bad port", "1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false},         // Expect salvaged host, default port
+		{"tcp with bad port", "tcp://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"}, false},   // Expect salvaged host, default port
+		{"dot with bad port", "tls://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"}, false},  // Expect salvaged host, default port
 		{"doq with bad port", "quic://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:853", Protocol: DOQ, Hostname: "1.1.1.1"}, false}, // Expect salvaged host, default port
-		{"invalid hostname", "bad-hostname", ServerInfo{}, true}, // Expect error
-		{"invalid hostname with scheme", "tcp://bad:hostname", ServerInfo{}, true}, // Expect error
+		{"invalid hostname", "bad-hostname", ServerInfo{}, true},                                                                   // Expect error
+		{"invalid hostname with scheme", "tcp://bad:hostname", ServerInfo{}, true},                                                 // Expect error
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

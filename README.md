@@ -43,8 +43,31 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 
 ## Building
 
+### Quick Start
 ```bash
+# Using Makefile (recommended)
+make build
+
+# Or directly with Go
 go build -o dns-benchmark ./cmd/main.go
+```
+
+### Development Workflow
+```bash
+# See all available commands
+make help
+
+# Build and run
+make run
+
+# Run tests
+make test
+
+# Format, lint, and test
+make check
+
+# Build for all platforms
+make build-all
 ```
 
 This will create an executable named `dns-benchmark` in the current directory.
@@ -52,6 +75,9 @@ This will create an executable named `dns-benchmark` in the current directory.
 ## Usage
 
 ```bash
+# Print version information
+./dns-benchmark --version
+
 # Print usage help
 ./dns-benchmark -h
 
