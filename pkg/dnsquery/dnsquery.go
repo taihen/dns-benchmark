@@ -39,7 +39,7 @@ const (
 	dotcomCheckPrefix         = "dnsbench-dotcom-"
 	dotcomCheckSuffix         = ".com."
 	dohUserAgent              = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
-	
+
 	// QUIC connection pool configuration
 	maxPooledConnections = 10
 	connectionTTL        = 30 * time.Second
@@ -85,7 +85,7 @@ func init() {
 func (p *quicConnectionPool) startCleanup() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -102,16 +102,16 @@ func (p *quicConnectionPool) startCleanup() {
 func (p *quicConnectionPool) cleanupStaleConnections() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	now := time.Now()
 	for serverAddr, conns := range p.connections {
 		var activeConns []*quicConnection
-		
+
 		for _, conn := range conns {
 			// Remove connections that are too old or have been idle too long
-			if !conn.inUse && 
-			   (now.Sub(conn.createdAt) > connectionTTL || 
-			    now.Sub(conn.lastUsed) > maxIdleTime) {
+			if !conn.inUse &&
+				(now.Sub(conn.createdAt) > connectionTTL ||
+					now.Sub(conn.lastUsed) > maxIdleTime) {
 				if conn.session != nil {
 					conn.session.CloseWithError(0, "cleanup")
 				}
@@ -119,7 +119,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 			}
 			activeConns = append(activeConns, conn)
 		}
-		
+
 		if len(activeConns) == 0 {
 			delete(p.connections, serverAddr)
 		} else {
@@ -132,7 +132,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (quic.Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	// Look for an available connection
 	if conns, exists := p.connections[serverAddr]; exists {
 		for _, conn := range conns {
@@ -151,7 +151,7 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 			}
 		}
 	}
-	
+
 	// No available connection, create a new one if under limit
 	if conns := p.connections[serverAddr]; len(conns) >= maxPooledConnections {
 		// Pool is full, create a temporary connection (not pooled)
@@ -159,16 +159,16 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 		defer cancel()
 		return quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
 	}
-	
+
 	// Create new connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	session, err := quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Add to pool
 	conn := &quicConnection{
 		session:   session,
@@ -176,7 +176,7 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 		createdAt: time.Now(),
 		inUse:     true,
 	}
-	
+
 	p.connections[serverAddr] = append(p.connections[serverAddr], conn)
 	return session, nil
 }
@@ -185,7 +185,7 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 func (p *quicConnectionPool) returnConnection(serverAddr string, session quic.Connection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if conns, exists := p.connections[serverAddr]; exists {
 		for _, conn := range conns {
 			if conn.session == session {
@@ -201,7 +201,7 @@ func (p *quicConnectionPool) returnConnection(serverAddr string, session quic.Co
 func (p *quicConnectionPool) closeAllConnections() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	for _, conns := range p.connections {
 		for _, conn := range conns {
 			if conn.session != nil {
@@ -354,7 +354,7 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to get connection for %s: %w", serverInfo.Address, err)}
 	}
-	
+
 	// Return connection to pool when done
 	defer globalQuicPool.returnConnection(serverInfo.Address, session)
 

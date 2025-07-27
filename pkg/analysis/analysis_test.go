@@ -38,8 +38,8 @@ func TestCalculateStdDev(t *testing.T) {
 		{"empty slice", []time.Duration{}, 0, 0},
 		{"single element", []time.Duration{100 * time.Millisecond}, 100 * time.Millisecond, 0}, // StdDev undefined for n=1
 		{"two identical elements", []time.Duration{100 * time.Millisecond, 100 * time.Millisecond}, 100 * time.Millisecond, 0},
-		{"two different elements", []time.Duration{100 * time.Millisecond, 300 * time.Millisecond}, 200 * time.Millisecond, time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2)/1.0)))}, // sqrt(((100-200)^2 + (300-200)^2) / (2-1)) = sqrt(10000+10000) = sqrt(20000) = 141.42... ms
-		{"three elements", []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond}, 200 * time.Millisecond, time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2)/2.0)))}, // sqrt(((100-200)^2 + (200-200)^2 + (300-200)^2) / (3-1)) = sqrt((10000+0+10000)/2) = sqrt(10000) = 100 ms
+		{"two different elements", []time.Duration{100 * time.Millisecond, 300 * time.Millisecond}, 200 * time.Millisecond, time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2) / 1.0)))},                 // sqrt(((100-200)^2 + (300-200)^2) / (2-1)) = sqrt(10000+10000) = sqrt(20000) = 141.42... ms
+		{"three elements", []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond}, 200 * time.Millisecond, time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2) / 2.0)))}, // sqrt(((100-200)^2 + (200-200)^2 + (300-200)^2) / (3-1)) = sqrt((10000+0+10000)/2) = sqrt(10000) = 100 ms
 		{"zero durations", []time.Duration{0, 0, 0}, 0, 0},
 	}
 
@@ -88,7 +88,7 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 				UncachedLatencies: []time.Duration{},
 			},
 			expectedAvgCached:      200 * time.Millisecond,
-			expectedStdDevCached:   time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2)/2.0))), // 100ms
+			expectedStdDevCached:   time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2) / 2.0))), // 100ms
 			expectedAvgUncached:    0,
 			expectedStdDevUncached: 0,
 			expectedReliability:    100.0,
@@ -104,7 +104,7 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 			expectedAvgCached:      0,
 			expectedStdDevCached:   0,
 			expectedAvgUncached:    200 * time.Millisecond,
-			expectedStdDevUncached: time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2)/1.0))), // 141ms
+			expectedStdDevUncached: time.Duration(math.Round(math.Sqrt(float64(100*100*1e6*1e6*2) / 1.0))), // 141ms
 			expectedReliability:    100.0,
 			expectedErrors:         0,
 		},
@@ -119,8 +119,8 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 			expectedAvgCached:      50 * time.Millisecond,
 			expectedStdDevCached:   0, // n=1
 			expectedAvgUncached:    200 * time.Millisecond,
-			expectedStdDevUncached: time.Duration(math.Round(math.Sqrt(float64(50*50*1e6*1e6*2)/1.0))), // 71ms
-			expectedReliability:    75.0,                                                               // 3 successes / 4 attempts
+			expectedStdDevUncached: time.Duration(math.Round(math.Sqrt(float64(50*50*1e6*1e6*2) / 1.0))), // 71ms
+			expectedReliability:    75.0,                                                                 // 3 successes / 4 attempts
 			expectedErrors:         1,
 		},
 		{

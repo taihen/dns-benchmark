@@ -961,7 +961,7 @@ func TestQuicConnectionPool(t *testing.T) {
 
 		// Test returnConnection with non-existent connection
 		testPool.returnConnection(serverAddr, nil)
-		
+
 		// Verify still empty after invalid return
 		testPool.mu.Lock()
 		assert.Empty(t, testPool.connections)
@@ -970,11 +970,11 @@ func TestQuicConnectionPool(t *testing.T) {
 
 	t.Run("cleanup stale connections", func(t *testing.T) {
 		serverAddr := "test2.example.com:853"
-		
+
 		// Add a mock old connection
 		testPool.mu.Lock()
 		mockConn := &quicConnection{
-			session:   nil, // Mock session - won't be used in cleanup test
+			session:   nil,                            // Mock session - won't be used in cleanup test
 			lastUsed:  time.Now().Add(-1 * time.Hour), // Very old
 			createdAt: time.Now().Add(-2 * time.Hour), // Very old
 			inUse:     false,
