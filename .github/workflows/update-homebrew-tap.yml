@@ -1,0 +1,98 @@
+name: Update Homebrew Tap on Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    name: Update tap formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source at release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Compute tarball URL and SHA256
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          URL="https://github.com/${OWNER}/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          SHA256=$(curl -fsSL "$URL" | sha256sum | awk '{print $1}')
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          VERSION_TRIMMED="${TAG#v}"
+          echo "version=${VERSION_TRIMMED}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone tap repository
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAP_TOKEN:-}" ]]; then
+            echo "HOMEBREW_TAP_TOKEN secret not set. Create a classic PAT with 'repo' scope and add it as a repository secret." >&2
+            exit 1
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/taihen/homebrew-tap.git" tap
+
+      - name: Copy and update formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          FORMULA_NAME="dns-benchmark"
+          mkdir -p tap/Formula
+          if [[ -f "Formula/${FORMULA_NAME}.rb" ]]; then
+            cp "Formula/${FORMULA_NAME}.rb" "tap/Formula/${FORMULA_NAME}.rb"
+          elif [[ -f "${FORMULA_NAME}.rb" ]]; then
+            cp "${FORMULA_NAME}.rb" "tap/Formula/${FORMULA_NAME}.rb"
+          else
+            echo "Formula/${FORMULA_NAME}.rb not found in repo" >&2
+            exit 1
+          fi
+
+          URL="${{ steps.artifact.outputs.url }}"
+          SHA256="${{ steps.artifact.outputs.sha256 }}"
+          VERSION_TRIMMED="${{ steps.artifact.outputs.version }}"
+
+          # Update url and sha256 lines; update version if present
+          sed -i.bak -E \
+            -e "s|^(\\s*url\\s+\").*\"|\\1${URL}\"|" \
+            -e "s|^(\\s*sha256\\s+\").*\"|\\1${SHA256}\"|" \
+            -e "s|^(\\s*version\\s+\").*\"|\\1${VERSION_TRIMMED}\"|" \
+            "tap/Formula/${FORMULA_NAME}.rb" || true
+          rm -f "tap/Formula/${FORMULA_NAME}.rb.bak"
+
+          echo "Preview of updated fields:"
+          grep -nE '^(\s*url|\s*sha256|\s*version)' "tap/Formula/${FORMULA_NAME}.rb" || true
+
+      - name: Commit and push to tap
+        env:
+          GIT_AUTHOR_NAME: github-actions
+          GIT_AUTHOR_EMAIL: actions@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions
+          GIT_COMMITTER_EMAIL: actions@users.noreply.github.com
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tap
+          git config user.name "$GIT_AUTHOR_NAME"
+          git config user.email "$GIT_AUTHOR_EMAIL"
+          git add Formula/dns-benchmark.rb
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          TAG="${{ github.event.release.tag_name }}"
+          git commit -m "dns-benchmark ${TAG}: update formula url and sha256"
+          git push origin HEAD:main
