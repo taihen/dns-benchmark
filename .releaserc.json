@@ -5,10 +5,12 @@
     "@semantic-release/release-notes-generator",
     ["@semantic-release/github", {
       "assets": [
-        {"path": "dist/accel-exporter-linux-amd64"},
-        {"path": "dist/accel-exporter-linux-arm64"},
-        {"path": "dist/accel-exporter-darwin-amd64"},
-        {"path": "dist/accel-exporter-darwin-arm64"},
+        {"path": "dist/dns-benchmark-linux-amd64"},
+        {"path": "dist/dns-benchmark-linux-arm64"},
+        {"path": "dist/dns-benchmark-darwin-amd64"},
+        {"path": "dist/dns-benchmark-darwin-arm64"},
+        {"path": "dist/dns-benchmark-windows-amd64.exe"},
+        {"path": "dist/dns-benchmark-windows-arm64.exe"},
         {"path": "dist/checksums.txt"}
       ]
     }],

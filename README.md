@@ -4,6 +4,27 @@
 [![Release](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml/badge.svg)](https://github.com/taihen/dns-benchmark/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/taihen/dns-benchmark)](https://goreportcard.com/report/github.com/taihen/dns-benchmark)
 
+## Installation
+
+### Homebrew (macOS)
+
+```bash
+# Install directly from your repository
+brew install taihen/dns-benchmark
+
+# Update to latest version
+brew upgrade taihen/dns-benchmark
+
+# Install from development branch
+brew install --HEAD taihen/dns-benchmark
+```
+
+### Manual Installation
+
+Download the latest release from the [releases page](https://github.com/taihen/dns-benchmark/releases) or build from source (see [Building](#building) section below).
+
+---
+
 This command-line tool benchmarks the performance and features of DNS resolvers. It helps users identify the fastest and most reliable recursive DNS server for their current network conditions by measuring various metrics across different protocols (UDP, TCP, DoT, DoH, DoQ).
 
 Visit [taihen.org](https://taihen.org) for introductory [announcement](https://taihen.org/posts/dns_benchmarking/).
@@ -44,6 +65,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 ## Building
 
 ### Quick Start
+
 ```bash
 # Using Makefile (recommended)
 make build
@@ -53,6 +75,7 @@ go build -o dns-benchmark ./cmd/main.go
 ```
 
 ### Development Workflow
+
 ```bash
 # See all available commands
 make help

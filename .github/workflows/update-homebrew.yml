@@ -1,0 +1,73 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-homebrew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dns-benchmark
+        uses: actions/checkout@v4
+        with:
+          repository: taihen/dns-benchmark
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Download release assets
+        run: |
+          # Download macOS binaries
+          curl -L -o dns-benchmark-darwin-arm64 "https://github.com/taihen/dns-benchmark/releases/download/${{ github.event.release.tag_name }}/dns-benchmark-darwin-arm64"
+          curl -L -o dns-benchmark-darwin-amd64 "https://github.com/taihen/dns-benchmark/releases/download/${{ github.event.release.tag_name }}/dns-benchmark-darwin-amd64"
+
+      - name: Calculate checksums
+        run: |
+          ARM64_SHA=$(shasum -a 256 dns-benchmark-darwin-arm64 | cut -d' ' -f1)
+          AMD64_SHA=$(shasum -a 256 dns-benchmark-darwin-amd64 | cut -d' ' -f1)
+          echo "ARM64_SHA=$ARM64_SHA" >> $GITHUB_ENV
+          echo "AMD64_SHA=$AMD64_SHA" >> $GITHUB_ENV
+          echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+
+      - name: Create Formula directory
+        run: |
+          mkdir -p Formula
+
+      - name: Update formula
+        run: |
+          cat > Formula/dns-benchmark.rb << FORMULA_EOF
+          class DnsBenchmark < Formula
+            desc "DNS benchmark tool that tests DNS resolver performance across multiple protocols"
+            homepage "https://github.com/taihen/dns-benchmark"
+            url "https://github.com/taihen/dns-benchmark/releases/download/${{ env.VERSION }}/dns-benchmark-darwin-arm64"
+            sha256 "${{ env.ARM64_SHA }}"
+            license "MIT"
+            head "https://github.com/taihen/dns-benchmark.git", branch: "main"
+
+            on_intel do
+              url "https://github.com/taihen/dns-benchmark/releases/download/${{ env.VERSION }}/dns-benchmark-darwin-amd64"
+              sha256 "${{ env.AMD64_SHA }}"
+            end
+
+            def install
+              # Install the binary directly from the release
+              bin.install "dns-benchmark-darwin-\#{Hardware::CPU.arch}" => "dns-benchmark"
+            end
+
+            test do
+              # Test that the binary runs and shows version
+              assert_match "dns-benchmark", shell_output("\#{bin}/dns-benchmark --version")
+            end
+          end
+          FORMULA_EOF
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add Formula/dns-benchmark.rb
+          git commit -m "Update dns-benchmark to ${{ env.VERSION }}" || exit 0
+          git push
+
+      - name: Clean up
+        run: |
+          rm -f dns-benchmark-darwin-*
