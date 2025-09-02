@@ -115,6 +115,9 @@ var DefaultDNSStrings = []string{
 	"tls://dns.adguard-dns.com",
 	"https://dns.adguard-dns.com/dns-query",
 	"quic://dns.adguard-dns.com",
+    // DNS0.eu
+    "tls://dns0.eu",
+    "https://dns0.eu/dns-query",
 }
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
