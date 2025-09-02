@@ -9,14 +9,11 @@
 ### Homebrew (macOS)
 
 ```bash
-# Install directly from your repository
-brew install taihen/dns-benchmark
+# Add Homebrew tap
+brew tap taihen/dns-benchmark
 
 # Update to latest version
 brew upgrade taihen/dns-benchmark
-
-# Install from development branch
-brew install --HEAD taihen/dns-benchmark
 ```
 
 ### Manual Installation
