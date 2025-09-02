@@ -20,56 +20,310 @@ func TestParseServerString(t *testing.T) {
 		wantErr   bool
 	}{
 		// UDP Cases
-		{"udp ip only", "1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false},
-		{"udp ip with port", "8.8.8.8:53", ServerInfo{Address: "8.8.8.8:53", Protocol: UDP, Hostname: "8.8.8.8"}, false},
-		{"udp ipv6", "2606:4700:4700::1111", ServerInfo{Address: "[2606:4700:4700::1111]:53", Protocol: UDP, Hostname: "2606:4700:4700::1111"}, false},
-		{"udp ipv6 with port", "[2001:4860:4860::8888]:53", ServerInfo{Address: "[2001:4860:4860::8888]:53", Protocol: UDP, Hostname: "2001:4860:4860::8888"}, false},
-		{"udp hostname", "dns.google", ServerInfo{Address: "dns.google:53", Protocol: UDP, Hostname: "dns.google"}, false},
-		{"udp hostname with port", "dns.google:53", ServerInfo{Address: "dns.google:53", Protocol: UDP, Hostname: "dns.google"}, false},
+		{
+			"udp ip only",
+			"1.1.1.1",
+			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
+			false,
+		},
+		{
+			"udp ip with port",
+			"8.8.8.8:53",
+			ServerInfo{Address: "8.8.8.8:53", Protocol: UDP, Hostname: "8.8.8.8"},
+			false,
+		},
+		{
+			"udp ipv6",
+			"2606:4700:4700::1111",
+			ServerInfo{
+				Address:  "[2606:4700:4700::1111]:53",
+				Protocol: UDP,
+				Hostname: "2606:4700:4700::1111",
+			},
+			false,
+		},
+		{
+			"udp ipv6 with port",
+			"[2001:4860:4860::8888]:53",
+			ServerInfo{
+				Address:  "[2001:4860:4860::8888]:53",
+				Protocol: UDP,
+				Hostname: "2001:4860:4860::8888",
+			},
+			false,
+		},
+		{
+			"udp hostname",
+			"dns.google",
+			ServerInfo{Address: "dns.google:53", Protocol: UDP, Hostname: "dns.google"},
+			false,
+		},
+		{
+			"udp hostname with port",
+			"dns.google:53",
+			ServerInfo{Address: "dns.google:53", Protocol: UDP, Hostname: "dns.google"},
+			false,
+		},
 
 		// TCP Cases
-		{"tcp ip only", "tcp://1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"}, false},
-		{"tcp ip with port", "tcp://8.8.8.8:53", ServerInfo{Address: "8.8.8.8:53", Protocol: TCP, Hostname: "8.8.8.8"}, false},
-		{"tcp ipv6", "tcp://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:53", Protocol: TCP, Hostname: "2606:4700:4700::1111"}, false},              // Expect correct parsing
-		{"tcp ipv6 with port", "tcp://[2001:4860:4860::8888]:53", ServerInfo{Address: "[2001:4860:4860::8888]:53", Protocol: TCP, Hostname: "2001:4860:4860::8888"}, false}, // Expect correct parsing
-		{"tcp hostname", "tcp://dns.google", ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"}, false},
-		{"tcp hostname with port", "tcp://dns.google:53", ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"}, false},
+		{
+			"tcp ip only",
+			"tcp://1.1.1.1",
+			ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"},
+			false,
+		},
+		{
+			"tcp ip with port",
+			"tcp://8.8.8.8:53",
+			ServerInfo{Address: "8.8.8.8:53", Protocol: TCP, Hostname: "8.8.8.8"},
+			false,
+		},
+		{
+			"tcp ipv6",
+			"tcp://[2606:4700:4700::1111]",
+			ServerInfo{
+				Address:  "[2606:4700:4700::1111]:53",
+				Protocol: TCP,
+				Hostname: "2606:4700:4700::1111",
+			},
+			false,
+		}, // Expect correct parsing
+		{
+			"tcp ipv6 with port",
+			"tcp://[2001:4860:4860::8888]:53",
+			ServerInfo{
+				Address:  "[2001:4860:4860::8888]:53",
+				Protocol: TCP,
+				Hostname: "2001:4860:4860::8888",
+			},
+			false,
+		}, // Expect correct parsing
+		{
+			"tcp hostname",
+			"tcp://dns.google",
+			ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"},
+			false,
+		},
+		{
+			"tcp hostname with port",
+			"tcp://dns.google:53",
+			ServerInfo{Address: "dns.google:53", Protocol: TCP, Hostname: "dns.google"},
+			false,
+		},
 
 		// DoT Cases
-		{"dot ip only", "tls://1.1.1.1", ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"}, false},
-		{"dot ip with port", "tls://8.8.8.8:853", ServerInfo{Address: "8.8.8.8:853", Protocol: DOT, Hostname: "8.8.8.8"}, false},
-		{"dot ipv6", "tls://[2606:4700:4700::1111]", ServerInfo{Address: "[2606:4700:4700::1111]:853", Protocol: DOT, Hostname: "2606:4700:4700::1111"}, false},               // Expect correct parsing
-		{"dot ipv6 with port", "tls://[2001:4860:4860::8888]:853", ServerInfo{Address: "[2001:4860:4860::8888]:853", Protocol: DOT, Hostname: "2001:4860:4860::8888"}, false}, // Expect correct parsing
-		{"dot hostname", "tls://dns.google", ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"}, false},
-		{"dot hostname with port", "tls://dns.google:853", ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"}, false},
-		{"dot hostname cloudflare", "tls://cloudflare-dns.com", ServerInfo{Address: "cloudflare-dns.com:853", Protocol: DOT, Hostname: "cloudflare-dns.com"}, false},
+		{
+			"dot ip only",
+			"tls://1.1.1.1",
+			ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"},
+			false,
+		},
+		{
+			"dot ip with port",
+			"tls://8.8.8.8:853",
+			ServerInfo{Address: "8.8.8.8:853", Protocol: DOT, Hostname: "8.8.8.8"},
+			false,
+		},
+		{
+			"dot ipv6",
+			"tls://[2606:4700:4700::1111]",
+			ServerInfo{
+				Address:  "[2606:4700:4700::1111]:853",
+				Protocol: DOT,
+				Hostname: "2606:4700:4700::1111",
+			},
+			false,
+		}, // Expect correct parsing
+		{
+			"dot ipv6 with port",
+			"tls://[2001:4860:4860::8888]:853",
+			ServerInfo{
+				Address:  "[2001:4860:4860::8888]:853",
+				Protocol: DOT,
+				Hostname: "2001:4860:4860::8888",
+			},
+			false,
+		}, // Expect correct parsing
+		{
+			"dot hostname",
+			"tls://dns.google",
+			ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"},
+			false,
+		},
+		{
+			"dot hostname with port",
+			"tls://dns.google:853",
+			ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"},
+			false,
+		},
+		{
+			"dot hostname cloudflare",
+			"tls://cloudflare-dns.com",
+			ServerInfo{
+				Address:  "cloudflare-dns.com:853",
+				Protocol: DOT,
+				Hostname: "cloudflare-dns.com",
+			},
+			false,
+		},
 
 		// DoH Cases
-		{"doh full url", "https://cloudflare-dns.com/dns-query", ServerInfo{Address: "https://cloudflare-dns.com/dns-query", Protocol: DOH, Hostname: "cloudflare-dns.com", DoHPath: "/dns-query"}, false},
-		{"doh google", "https://dns.google/dns-query", ServerInfo{Address: "https://dns.google/dns-query", Protocol: DOH, Hostname: "dns.google", DoHPath: "/dns-query"}, false},
-		{"doh with ip", "https://1.1.1.1/dns-query", ServerInfo{Address: "https://1.1.1.1/dns-query", Protocol: DOH, Hostname: "1.1.1.1", DoHPath: "/dns-query"}, false},
-		{"doh no path", "https://dns.quad9.net", ServerInfo{Address: "https://dns.quad9.net", Protocol: DOH, Hostname: "dns.quad9.net", DoHPath: ""}, false},
-		{"doh invalid url", "https://:invalid:", ServerInfo{}, true},                    // Expect error
-		{"doh wrong scheme", "http://cloudflare-dns.com/dns-query", ServerInfo{}, true}, // Expect error
+		{
+			"doh full url",
+			"https://cloudflare-dns.com/dns-query",
+			ServerInfo{
+				Address:  "https://cloudflare-dns.com/dns-query",
+				Protocol: DOH,
+				Hostname: "cloudflare-dns.com",
+				DoHPath:  "/dns-query",
+			},
+			false,
+		},
+		{
+			"doh google",
+			"https://dns.google/dns-query",
+			ServerInfo{
+				Address:  "https://dns.google/dns-query",
+				Protocol: DOH,
+				Hostname: "dns.google",
+				DoHPath:  "/dns-query",
+			},
+			false,
+		},
+		{
+			"doh with ip",
+			"https://1.1.1.1/dns-query",
+			ServerInfo{
+				Address:  "https://1.1.1.1/dns-query",
+				Protocol: DOH,
+				Hostname: "1.1.1.1",
+				DoHPath:  "/dns-query",
+			},
+			false,
+		},
+		{
+			"doh no path",
+			"https://dns.quad9.net",
+			ServerInfo{
+				Address:  "https://dns.quad9.net",
+				Protocol: DOH,
+				Hostname: "dns.quad9.net",
+				DoHPath:  "",
+			},
+			false,
+		},
+		{
+			"doh invalid url",
+			"https://:invalid:",
+			ServerInfo{},
+			true,
+		}, // Expect error
+		{
+			"doh wrong scheme",
+			"http://cloudflare-dns.com/dns-query",
+			ServerInfo{},
+			true,
+		}, // Expect error
 
 		// DoQ Cases
-		{"doq hostname", "quic://dns.adguard-dns.com", ServerInfo{Address: "dns.adguard-dns.com:853", Protocol: DOQ, Hostname: "dns.adguard-dns.com"}, false},
-		{"doq hostname with port", "quic://dns.adguard-dns.com:784", ServerInfo{Address: "dns.adguard-dns.com:784", Protocol: DOQ, Hostname: "dns.adguard-dns.com"}, false},
-		{"doq ip", "quic://94.140.14.14", ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"}, false},
-		{"doq ip with port", "quic://94.140.14.14:853", ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"}, false},
-		{"doq ipv6", "quic://[2a10:50c0::ad1:ff]", ServerInfo{Address: "[2a10:50c0::ad1:ff]:853", Protocol: DOQ, Hostname: "2a10:50c0::ad1:ff"}, false},               // Expect correct parsing
-		{"doq ipv6 with port", "quic://[2a10:50c0::ad2:ff]:784", ServerInfo{Address: "[2a10:50c0::ad2:ff]:784", Protocol: DOQ, Hostname: "2a10:50c0::ad2:ff"}, false}, // Expect correct parsing
+		{
+			"doq hostname",
+			"quic://dns.adguard-dns.com",
+			ServerInfo{
+				Address:  "dns.adguard-dns.com:853",
+				Protocol: DOQ,
+				Hostname: "dns.adguard-dns.com",
+			},
+			false,
+		},
+		{
+			"doq hostname with port",
+			"quic://dns.adguard-dns.com:784",
+			ServerInfo{
+				Address:  "dns.adguard-dns.com:784",
+				Protocol: DOQ,
+				Hostname: "dns.adguard-dns.com",
+			},
+			false,
+		},
+		{
+			"doq ip",
+			"quic://94.140.14.14",
+			ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"},
+			false,
+		},
+		{
+			"doq ip with port",
+			"quic://94.140.14.14:853",
+			ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"},
+			false,
+		},
+		{
+			"doq ipv6",
+			"quic://[2a10:50c0::ad1:ff]",
+			ServerInfo{
+				Address:  "[2a10:50c0::ad1:ff]:853",
+				Protocol: DOQ,
+				Hostname: "2a10:50c0::ad1:ff",
+			},
+			false,
+		}, // Expect correct parsing
+		{
+			"doq ipv6 with port",
+			"quic://[2a10:50c0::ad2:ff]:784",
+			ServerInfo{
+				Address:  "[2a10:50c0::ad2:ff]:784",
+				Protocol: DOQ,
+				Hostname: "2a10:50c0::ad2:ff",
+			},
+			false,
+		}, // Expect correct parsing
 
 		// Edge Cases
 		{"empty string", "", ServerInfo{}, true},       // Now returns error
 		{"whitespace only", "   ", ServerInfo{}, true}, // Now returns error
-		{"invalid prefix", "invalid://1.1.1.1", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false},      // Expect UDP fallback
-		{"udp with bad port", "1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"}, false},         // Expect salvaged host, default port
-		{"tcp with bad port", "tcp://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"}, false},   // Expect salvaged host, default port
-		{"dot with bad port", "tls://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"}, false},  // Expect salvaged host, default port
-		{"doq with bad port", "quic://1.1.1.1:bad", ServerInfo{Address: "1.1.1.1:853", Protocol: DOQ, Hostname: "1.1.1.1"}, false}, // Expect salvaged host, default port
-		{"invalid hostname", "bad-hostname", ServerInfo{}, true},                                                                   // Expect error
-		{"invalid hostname with scheme", "tcp://bad:hostname", ServerInfo{}, true},                                                 // Expect error
+		{
+			"invalid prefix",
+			"invalid://1.1.1.1",
+			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
+			false,
+		}, // Expect UDP fallback
+		{
+			"udp with bad port",
+			"1.1.1.1:bad",
+			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
+			false,
+		}, // Expect salvaged host, default port
+		{
+			"tcp with bad port",
+			"tcp://1.1.1.1:bad",
+			ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"},
+			false,
+		}, // Expect salvaged host, default port
+		{
+			"dot with bad port",
+			"tls://1.1.1.1:bad",
+			ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"},
+			false,
+		}, // Expect salvaged host, default port
+		{
+			"doq with bad port",
+			"quic://1.1.1.1:bad",
+			ServerInfo{Address: "1.1.1.1:853", Protocol: DOQ, Hostname: "1.1.1.1"},
+			false,
+		}, // Expect salvaged host, default port
+		{
+			"invalid hostname",
+			"bad-hostname",
+			ServerInfo{},
+			true,
+		}, // Expect error
+		{
+			"invalid hostname with scheme",
+			"tcp://bad:hostname",
+			ServerInfo{},
+			true,
+		}, // Expect error
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,8 +348,16 @@ func TestServerInfoString(t *testing.T) {
 		{"udp", ServerInfo{Address: "1.1.1.1:53", Protocol: UDP}, "1.1.1.1:53"},
 		{"tcp", ServerInfo{Address: "8.8.8.8:53", Protocol: TCP}, "tcp://8.8.8.8:53"},
 		{"dot", ServerInfo{Address: "9.9.9.9:853", Protocol: DOT}, "tls://9.9.9.9:853"},
-		{"doh", ServerInfo{Address: "https://cloudflare-dns.com/dns-query", Protocol: DOH}, "https://cloudflare-dns.com/dns-query"},
-		{"doq", ServerInfo{Address: "dns.adguard-dns.com:853", Protocol: DOQ}, "quic://dns.adguard-dns.com:853"},
+		{
+			"doh",
+			ServerInfo{Address: "https://cloudflare-dns.com/dns-query", Protocol: DOH},
+			"https://cloudflare-dns.com/dns-query",
+		},
+		{
+			"doq",
+			ServerInfo{Address: "dns.adguard-dns.com:853", Protocol: DOQ},
+			"quic://dns.adguard-dns.com:853",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,8 +398,13 @@ func TestReadServerStringsFromFile(t *testing.T) {
 		{
 			name:        "valid file",
 			fileContent: "1.1.1.1\ntls://8.8.8.8\n# Comment\nhttps://dns.google/dns-query\n\nquic://dns.adguard-dns.com",
-			want:        []string{"1.1.1.1", "tls://8.8.8.8", "https://dns.google/dns-query", "quic://dns.adguard-dns.com"},
-			wantErr:     false,
+			want: []string{
+				"1.1.1.1",
+				"tls://8.8.8.8",
+				"https://dns.google/dns-query",
+				"quic://dns.adguard-dns.com",
+			},
+			wantErr: false,
 		},
 		{
 			name:        "empty file",
@@ -178,7 +445,11 @@ func TestReadServerStringsFromFile(t *testing.T) {
 				t.Fatalf("readServerStringsFromFile() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errContains) {
-				t.Errorf("readServerStringsFromFile() error = %q, want error containing %q", err, tt.errContains)
+				t.Errorf(
+					"readServerStringsFromFile() error = %q, want error containing %q",
+					err,
+					tt.errContains,
+				)
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("readServerStringsFromFile() got = %v, want %v", got, tt.want)
@@ -199,28 +470,61 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 			want:          []ServerInfo{},
 		},
 		{
-			name:          "no duplicates",
-			serverStrings: []string{"1.1.1.1", "tcp://8.8.8.8", "tls://9.9.9.9", "https://cloudflare-dns.com/dns-query", "quic://dns.adguard-dns.com"},
+			name: "no duplicates",
+			serverStrings: []string{
+				"1.1.1.1",
+				"tcp://8.8.8.8",
+				"tls://9.9.9.9",
+				"https://cloudflare-dns.com/dns-query",
+				"quic://dns.adguard-dns.com",
+			},
 			want: []ServerInfo{
 				{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
 				{Address: "8.8.8.8:53", Protocol: TCP, Hostname: "8.8.8.8"},
 				{Address: "9.9.9.9:853", Protocol: DOT, Hostname: "9.9.9.9"},
-				{Address: "https://cloudflare-dns.com/dns-query", Protocol: DOH, Hostname: "cloudflare-dns.com", DoHPath: "/dns-query"},
-				{Address: "dns.adguard-dns.com:853", Protocol: DOQ, Hostname: "dns.adguard-dns.com"},
+				{
+					Address:  "https://cloudflare-dns.com/dns-query",
+					Protocol: DOH,
+					Hostname: "cloudflare-dns.com",
+					DoHPath:  "/dns-query",
+				},
+				{
+					Address:  "dns.adguard-dns.com:853",
+					Protocol: DOQ,
+					Hostname: "dns.adguard-dns.com",
+				},
 			},
 		},
 		{
-			name:          "duplicates",
-			serverStrings: []string{"1.1.1.1", "1.1.1.1:53", "tls://9.9.9.9", "tls://9.9.9.9:853", "https://dns.google/dns-query", "https://dns.google/dns-query"},
+			name: "duplicates",
+			serverStrings: []string{
+				"1.1.1.1",
+				"1.1.1.1:53",
+				"tls://9.9.9.9",
+				"tls://9.9.9.9:853",
+				"https://dns.google/dns-query",
+				"https://dns.google/dns-query",
+			},
 			want: []ServerInfo{
 				{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
 				{Address: "9.9.9.9:853", Protocol: DOT, Hostname: "9.9.9.9"},
-				{Address: "https://dns.google/dns-query", Protocol: DOH, Hostname: "dns.google", DoHPath: "/dns-query"},
+				{
+					Address:  "https://dns.google/dns-query",
+					Protocol: DOH,
+					Hostname: "dns.google",
+					DoHPath:  "/dns-query",
+				},
 			},
 		},
 		{
-			name:          "invalid entries mixed",
-			serverStrings: []string{"1.1.1.1", "invalid-entry", "tls://9.9.9.9", "https://:badurl:", "8.8.8.8"},
+			name: "invalid entries mixed",
+			serverStrings: []string{
+				"1.1.1.1",
+				"invalid-entry",
+				"tls://9.9.9.9",
+				"https://:badurl:",
+				"8.8.8.8",
+			},
 			want: []ServerInfo{
 				{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
 				// invalid-entry now returns error and is skipped
@@ -360,10 +664,18 @@ func TestLoadAccuracyCheckFile(t *testing.T) {
 				t.Fatalf("loadAccuracyCheckFile() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr && err != nil && !strings.Contains(err.Error(), tt.errContains) {
-				t.Errorf("loadAccuracyCheckFile() error = %q, want error containing %q", err, tt.errContains)
+				t.Errorf(
+					"loadAccuracyCheckFile() error = %q, want error containing %q",
+					err,
+					tt.errContains,
+				)
 			}
 			if gotDomain != tt.wantDomain {
-				t.Errorf("loadAccuracyCheckFile() gotDomain = %v, want %v", gotDomain, tt.wantDomain)
+				t.Errorf(
+					"loadAccuracyCheckFile() gotDomain = %v, want %v",
+					gotDomain,
+					tt.wantDomain,
+				)
 			}
 			if gotIP != tt.wantIP {
 				t.Errorf("loadAccuracyCheckFile() gotIP = %v, want %v", gotIP, tt.wantIP)
