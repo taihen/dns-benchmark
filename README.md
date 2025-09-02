@@ -13,7 +13,7 @@
 brew tap taihen/dns-benchmark
 
 # Update to latest version
-brew upgrade taihen/dns-benchmark
+brew install taihen/tap/dns-benchmark
 ```
 
 ### Manual Installation
