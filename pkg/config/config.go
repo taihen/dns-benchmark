@@ -114,7 +114,6 @@ var DefaultDNSStrings = []string{
 	"94.140.14.14",
 	"tls://dns.adguard-dns.com",
 	"https://dns.adguard-dns.com/dns-query",
-	"quic://dns.adguard-dns.com",
     // DNS0.eu
     "tls://dns0.eu",
     "https://dns0.eu/dns-query",
