@@ -1,13 +1,23 @@
-# Basic Dependabot configuration for Go modules
-
 version: 2
 updates:
-  - package-ecosystem: "gomod"
-    directory: "/"
+  - package-ecosystem: gomod
+    directory: /
     schedule:
-      interval: "daily"
-    reviewers:
-       - "taihen"
-    assignees:
-       - "taihen"
-    open-pull-requests-limit: 5
+      interval: daily
+    commit-message:
+      prefix: fix(deps)
+      include: scope
+  - package-ecosystem: github-actions
+    directory: /.github
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: fix(deps)
+      include: scope
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: fix
+      include: scope

@@ -114,14 +114,22 @@ var DefaultDNSStrings = []string{
 	"94.140.14.14",
 	"tls://dns.adguard-dns.com",
 	"https://dns.adguard-dns.com/dns-query",
-	"quic://dns.adguard-dns.com",
+	// DNS0.eu
+	"193.110.81.0",
+	"185.253.5.0",
+	"tls://dns0.eu",
 }
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
 func LoadConfig() *Config {
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.ServersFile, "f", "", "Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)")
+	flag.StringVar(
+		&cfg.ServersFile,
+		"f",
+		"",
+		"Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)",
+	)
 	flag.IntVar(&cfg.NumQueries, "n", 10, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
 	flag.IntVar(&cfg.Concurrency, "c", 5, "Max concurrent queries/checks")
@@ -132,7 +140,12 @@ func LoadConfig() *Config {
 	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
 	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
 	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Perform '.com' TLD lookup time check")
-	flag.StringVar(&cfg.AccuracyCheckFile, "accuracy-file", "", "Path to file for accuracy check (domain IP per line, uses first valid entry)")
+	flag.StringVar(
+		&cfg.AccuracyCheckFile,
+		"accuracy-file",
+		"",
+		"Path to file for accuracy check (domain IP per line, uses first valid entry)",
+	)
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose output")
 	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (CSV/JSON)")
 	flag.StringVar(&cfg.OutputFormat, "format", "console", "Output format (console, csv, json)")
@@ -145,7 +158,12 @@ func LoadConfig() *Config {
 	if cfg.AccuracyCheckFile != "" {
 		domain, ip, err := loadAccuracyCheckFile(cfg.AccuracyCheckFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not load accuracy check file %s: %v. Disabling check.\n", cfg.AccuracyCheckFile, err)
+			fmt.Fprintf(
+				os.Stderr,
+				"Warning: Could not load accuracy check file %s: %v. Disabling check.\n",
+				cfg.AccuracyCheckFile,
+				err,
+			)
 			cfg.AccuracyCheckFile = ""
 		} else {
 			cfg.AccuracyCheckDomain = domain
@@ -209,7 +227,12 @@ func printVerboseConfig(cfg *Config) {
 	fmt.Printf("Check Rebinding:   %t\n", cfg.CheckRebinding)
 	fmt.Printf("Check Dotcom:      %t\n", cfg.CheckDotcom)
 	if cfg.AccuracyCheckFile != "" {
-		fmt.Printf("Accuracy Check:    Enabled (File: %s, Using: %s -> %s)\n", cfg.AccuracyCheckFile, cfg.AccuracyCheckDomain, cfg.AccuracyCheckIP)
+		fmt.Printf(
+			"Accuracy Check:    Enabled (File: %s, Using: %s -> %s)\n",
+			cfg.AccuracyCheckFile,
+			cfg.AccuracyCheckDomain,
+			cfg.AccuracyCheckIP,
+		)
 	} else {
 		fmt.Println("Accuracy Check:    Disabled")
 	}
@@ -313,14 +336,24 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 			return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err)
 		}
 		if u.Scheme != "https" {
-			return ServerInfo{}, fmt.Errorf("invalid DoH URL scheme in '%s': must be https", serverStr)
+			return ServerInfo{}, fmt.Errorf(
+				"invalid DoH URL scheme in '%s': must be https",
+				serverStr,
+			)
 		}
 		host := u.Hostname()
 		if host == "" {
-			return ServerInfo{}, fmt.Errorf("invalid DoH URL (missing or invalid host): '%s'", serverStr)
+			return ServerInfo{}, fmt.Errorf(
+				"invalid DoH URL (missing or invalid host): '%s'",
+				serverStr,
+			)
 		}
 		if !isValidHostname(host) {
-			return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in DoH URL '%s'", host, serverStr)
+			return ServerInfo{}, fmt.Errorf(
+				"invalid hostname '%s' in DoH URL '%s'",
+				host,
+				serverStr,
+			)
 		}
 		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
 	}
@@ -365,7 +398,13 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 
 		// Validate port is numeric; fallback to defaultPort if not
 		if _, perr := strconv.Atoi(port); perr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, hostname)
+			fmt.Fprintf(
+				os.Stderr,
+				"Warning: Invalid port in '%s', using default port %s for host '%s'.\n",
+				serverStr,
+				defaultPort,
+				hostname,
+			)
 			port = defaultPort
 		}
 	} else {
@@ -393,7 +432,11 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 
 	// Ensure non-IP hostnames contain a dot
 	if net.ParseIP(hostname) == nil && !strings.Contains(hostname, ".") {
-		return ServerInfo{}, fmt.Errorf("invalid hostname '%s' in '%s': must contain a dot for non-IP", hostname, serverStr)
+		return ServerInfo{}, fmt.Errorf(
+			"invalid hostname '%s' in '%s': must contain a dot for non-IP",
+			hostname,
+			serverStr,
+		)
 	}
 
 	// Final validation of the derived hostname
@@ -499,7 +542,13 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 
 		parts := strings.Fields(line)
 		if len(parts) != 2 {
-			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid format in accuracy file %s (line %d): %s\n", filePath, lineNumber, line)
+			fmt.Fprintf(
+				os.Stderr,
+				"Warning: Skipping invalid format in accuracy file %s (line %d): %s\n",
+				filePath,
+				lineNumber,
+				line,
+			)
 			continue
 		}
 
@@ -508,13 +557,25 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 
 		parsedIP := net.ParseIP(ipToCheck)
 		if parsedIP == nil {
-			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid IP in accuracy file %s (line %d): %s\n", filePath, lineNumber, ipToCheck)
+			fmt.Fprintf(
+				os.Stderr,
+				"Warning: Skipping invalid IP in accuracy file %s (line %d): %s\n",
+				filePath,
+				lineNumber,
+				ipToCheck,
+			)
 			continue
 		}
 
 		// Basic domain check using the validation function and ensure it contains a dot
 		if !isValidHostname(domainToCheck) || !strings.Contains(domainToCheck, ".") {
-			fmt.Fprintf(os.Stderr, "Warning: Skipping potentially invalid domain in accuracy file %s (line %d): %s\n", filePath, lineNumber, parts[0])
+			fmt.Fprintf(
+				os.Stderr,
+				"Warning: Skipping potentially invalid domain in accuracy file %s (line %d): %s\n",
+				filePath,
+				lineNumber,
+				parts[0],
+			)
 			continue // Skip this line if domain is invalid
 		}
 
