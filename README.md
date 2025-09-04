@@ -6,7 +6,7 @@
 
 ## Installation
 
-### Homebrew (macOS)
+### Homebrew
 
 ```bash
 # Add Homebrew tap
