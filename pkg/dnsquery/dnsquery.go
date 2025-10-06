@@ -497,7 +497,7 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	dohClientsCache = b.dohClients
 	dohClientsMu.Unlock()
 
-	b.prewarmDoHConnections(servers)
+	b.prewarmConnections(servers)
 
 	// Initialize Results map
 	for _, server := range servers {
@@ -513,10 +513,10 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	return b.Results
 }
 
-// prewarmDoHConnections makes a dummy query to each DoH, DoT, and TCP server to establish
+// prewarmConnections makes a dummy query to each DoH, DoT, and TCP server to establish
 // connections before running the benchmark. This prevents connection setup overhead from
 // biasing the cached query results.
-func (b *Benchmarker) prewarmDoHConnections(servers []config.ServerInfo) {
+func (b *Benchmarker) prewarmConnections(servers []config.ServerInfo) {
 	for _, server := range servers {
 		if server.Protocol == config.DOH {
 			_ = performDoHQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
