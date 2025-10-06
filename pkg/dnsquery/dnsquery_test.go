@@ -263,7 +263,7 @@ func TestPerformDoHQuery_Success(t *testing.T) {
 		DoHPath:  "",                                        // Path is part of the URL
 	}
 
-	result := performDoHQuery(serverInfo, domain, qType, timeout)
+	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
 
 	require.NoError(t, result.Error)
 	require.NotNil(t, result.Response)
@@ -286,7 +286,7 @@ func TestPerformDoHQuery_Timeout(t *testing.T) {
 	defer server.Close()
 
 	serverInfo := config.ServerInfo{Address: server.URL, Protocol: config.DOH}
-	result := performDoHQuery(serverInfo, domain, qType, timeout)
+	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
 
 	require.Error(t, result.Error)
 	assert.Contains(t, result.Error.Error(), "doh query timed out")
@@ -303,7 +303,7 @@ func TestPerformDoHQuery_BadStatus(t *testing.T) {
 	defer server.Close()
 
 	serverInfo := config.ServerInfo{Address: server.URL, Protocol: config.DOH}
-	result := performDoHQuery(serverInfo, domain, qType, timeout)
+	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
 
 	require.Error(t, result.Error)
 	assert.Contains(t, result.Error.Error(), "doh query failed with status code 500")
@@ -459,18 +459,15 @@ func mockPerformQuery(cachedResults, uncachedResults map[string][]QueryResult) f
 
 		var count int
 		var resultsMap map[string][]QueryResult
-		// var countMap map[string]int // Ensure this is removed
 
 		if isCached {
 			count = cachedCallCounts[key]
 			cachedCallCounts[key]++
 			resultsMap = cachedResults
-			// countMap = cachedCallCounts // Ensure this is removed
 		} else {
 			count = uncachedCallCounts[key]
 			uncachedCallCounts[key]++
 			resultsMap = uncachedResults
-			// countMap = uncachedCallCounts // Ensure this is removed
 		}
 
 		if serverResults, ok := resultsMap[key]; ok && count < len(serverResults) {
@@ -478,6 +475,31 @@ func mockPerformQuery(cachedResults, uncachedResults map[string][]QueryResult) f
 		}
 		// Default error if no specific result is configured or count exceeds configured results
 		return QueryResult{Error: fmt.Errorf("mock PerformQuery: unexpected call %d for server %s", count, key)}
+	}
+}
+
+// mockAllProtocolFuncs sets up mocks for all protocol functions using the provided mock function
+func mockAllProtocolFuncs(mockFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult) (restore func()) {
+	originalUDP := performUDPQueryFunc
+	originalTCP := performTCPQueryFunc
+	originalDoT := performDoTQueryFunc
+	originalDoH := performDoHQueryFunc
+	originalDoQ := performDoQQueryFunc
+
+	performUDPQueryFunc = mockFunc
+	performTCPQueryFunc = mockFunc
+	performDoTQueryFunc = mockFunc
+	performDoHQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
+		return mockFunc(serverInfo, domain, qType, timeout)
+	}
+	performDoQQueryFunc = mockFunc
+
+	return func() {
+		performUDPQueryFunc = originalUDP
+		performTCPQueryFunc = originalTCP
+		performDoTQueryFunc = originalDoT
+		performDoHQueryFunc = originalDoH
+		performDoQQueryFunc = originalDoQ
 	}
 }
 
@@ -521,9 +543,9 @@ func TestBenchmarker_runLatencyBenchmark(t *testing.T) {
 	}
 
 	// --- Mocking ---
-	originalPerformQuery := PerformQueryFunc                                    // Store original PerformQuery variable
-	PerformQueryFunc = mockPerformQuery(mockCachedResults, mockUncachedResults) // Use the improved mock
-	defer func() { PerformQueryFunc = originalPerformQuery }()                  // Restore
+	mockFunc := mockPerformQuery(mockCachedResults, mockUncachedResults)
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
 
 	// --- Execution ---
 	benchmarker := NewBenchmarker(cfg)
@@ -645,8 +667,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	// --- Mocking ---
 	queryCallCounts := make(map[string]int) // Track calls per server
 	var mu sync.Mutex
-	originalPerformQuery := PerformQueryFunc
-	PerformQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	mockFunc := func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		mu.Lock() // Lock at the beginning
 
 		key := serverInfo.String()
@@ -686,7 +707,8 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 
 		return resultToReturn
 	}
-	defer func() { PerformQueryFunc = originalPerformQuery }()
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
 
 	// --- Execution ---
 	benchmarker := NewBenchmarker(cfg)
@@ -801,8 +823,7 @@ func TestBenchmarker_Run(t *testing.T) {
 	// --- Mocking ---
 	queryCallCounts := make(map[string]int)
 	var mu sync.Mutex
-	originalPerformQuery := PerformQueryFunc
-	PerformQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	mockFunc := func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		mu.Lock()
 		key := serverInfo.String()
 		count := queryCallCounts[key]
@@ -816,7 +837,8 @@ func TestBenchmarker_Run(t *testing.T) {
 		}
 		return QueryResult{Error: fmt.Errorf("mock PerformQueryFunc: unexpected call %d for server %s (domain: %s)", count, key, domain)}
 	}
-	defer func() { PerformQueryFunc = originalPerformQuery }()
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
 
 	// --- Execution ---
 	benchmarker := NewBenchmarker(cfg)
@@ -870,12 +892,21 @@ func TestBenchmarker_Run(t *testing.T) {
 
 // Mock function signature
 type mockQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult
+type mockDoHQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult
 
 // Helper to create a mock function that records it was called
 func createMockQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockQueryFunc {
 	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		*protocolCalled = expectedProtocol // Record which mock was called
 		// Return a dummy result
+		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
+	}
+}
+
+// Helper to create a mock DoH function with the httpClient parameter
+func createMockDoHQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockDoHQueryFunc {
+	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
+		*protocolCalled = expectedProtocol
 		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
 	}
 }
@@ -913,7 +944,7 @@ func TestPerformQuery_Dispatcher(t *testing.T) {
 			performUDPQueryFunc = createMockQueryFunc(&calledProtocol, config.UDP)
 			performTCPQueryFunc = createMockQueryFunc(&calledProtocol, config.TCP)
 			performDoTQueryFunc = createMockQueryFunc(&calledProtocol, config.DOT)
-			performDoHQueryFunc = createMockQueryFunc(&calledProtocol, config.DOH)
+			performDoHQueryFunc = createMockDoHQueryFunc(&calledProtocol, config.DOH)
 			performDoQQueryFunc = createMockQueryFunc(&calledProtocol, config.DOQ)
 
 			// Restore original functions after test using defer

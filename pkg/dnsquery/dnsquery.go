@@ -275,7 +275,8 @@ func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 // performDoHQuery performs a DNS query over HTTPS (DoH).
 // It constructs an HTTP request with the DNS query message and sends it to the DoH server.
-func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+// If httpClient is nil, a new client is created for this query.
+func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true)
@@ -285,7 +286,10 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)}
 	}
 
-	httpClient := &http.Client{Timeout: timeout}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: timeout}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -415,7 +419,7 @@ func performQueryImpl(serverInfo config.ServerInfo, domain string, qType uint16,
 	case config.DOT:
 		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
 	case config.DOH:
-		return performDoHQueryFunc(serverInfo, domain, qType, timeout)
+		return performDoHQueryFunc(serverInfo, domain, qType, timeout, nil)
 	case config.DOQ:
 		return performDoQQueryFunc(serverInfo, domain, qType, timeout)
 	default:
@@ -425,6 +429,25 @@ func performQueryImpl(serverInfo config.ServerInfo, domain string, qType uint16,
 
 // PerformQueryFunc is a variable holding the query function implementation, allowing mocking.
 var PerformQueryFunc = performQueryImpl
+
+// performQuery executes a DNS query with proper dependency injection for HTTP clients.
+func (b *Benchmarker) performQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	switch serverInfo.Protocol {
+	case config.UDP:
+		return performUDPQueryFunc(serverInfo, domain, qType, timeout)
+	case config.TCP:
+		return performTCPQueryFunc(serverInfo, domain, qType, timeout)
+	case config.DOT:
+		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
+	case config.DOH:
+		httpClient := b.dohClients[serverInfo.Address]
+		return performDoHQueryFunc(serverInfo, domain, qType, timeout, httpClient)
+	case config.DOQ:
+		return performDoQQueryFunc(serverInfo, domain, qType, timeout)
+	default:
+		return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
+	}
+}
 
 // queryJob represents a single query task.
 type queryJob struct {
@@ -445,9 +468,10 @@ type queryJobResult struct {
 
 // Benchmarker manages the benchmarking process.
 type Benchmarker struct {
-	Config  *config.Config
-	Results *analysis.BenchmarkResults
-	Limiter *rate.Limiter
+	Config     *config.Config
+	Results    *analysis.BenchmarkResults
+	Limiter    *rate.Limiter
+	dohClients map[string]*http.Client // HTTP clients for DoH servers
 }
 
 // NewBenchmarker creates a new Benchmarker instance.
@@ -456,16 +480,27 @@ func NewBenchmarker(cfg *config.Config) *Benchmarker {
 	if cfg.RateLimit <= 0 {
 		limiter = rate.NewLimiter(rate.Inf, 0)
 	}
+
+	dohClients := make(map[string]*http.Client)
+	for _, server := range cfg.Servers {
+		if server.Protocol == config.DOH {
+			dohClients[server.Address] = &http.Client{Timeout: cfg.Timeout}
+		}
+	}
+
 	return &Benchmarker{
-		Config:  cfg,
-		Results: analysis.NewBenchmarkResults(),
-		Limiter: limiter,
+		Config:     cfg,
+		Results:    analysis.NewBenchmarkResults(),
+		Limiter:    limiter,
+		dohClients: dohClients,
 	}
 }
 
 // Run performs the benchmark against the configured servers.
 func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	servers := b.Config.Servers
+
+	b.prewarmConnections(servers)
 
 	// Initialize Results map
 	for _, server := range servers {
@@ -479,6 +514,17 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	b.runChecksConcurrently(servers)
 
 	return b.Results
+}
+
+// prewarmConnections makes a dummy query to each DoH, DoT, and TCP server to establish
+// connections before running the benchmark. This prevents connection setup overhead from
+// biasing the cached query results.
+func (b *Benchmarker) prewarmConnections(servers []config.ServerInfo) {
+	for _, server := range servers {
+		if server.Protocol == config.DOH || server.Protocol == config.DOT || server.Protocol == config.TCP {
+			_ = b.performQuery(server, "example.com", dns.TypeA, b.Config.Timeout)
+		}
+	}
 }
 
 // calculateLatencyQueryCounts determines the number of cached and uncached queries.
@@ -686,14 +732,13 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
 	defer wg.Done()
 	for job := range jobs {
-		_ = b.Limiter.Wait(context.Background())                                                 // Apply rate limit
-		queryResult := PerformQueryFunc(job.serverInfo, job.domain, job.qType, b.Config.Timeout) // Use the variable
-		// Pass back identifying info
+		_ = b.Limiter.Wait(context.Background())
+		queryResult := b.performQuery(job.serverInfo, job.domain, job.qType, b.Config.Timeout)
 		results <- queryJobResult{
 			serverInfo: job.serverInfo,
 			result:     queryResult,
-			queryType:  job.queryType, // Will be zero value if it's a check job
-			checkType:  job.checkType, // Will be empty if it's a latency job
+			queryType:  job.queryType,
+			checkType:  job.checkType,
 		}
 	}
 }
