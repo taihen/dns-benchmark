@@ -31,12 +31,6 @@ var (
 	performDoQQueryFunc = performDoQQuery
 )
 
-// HTTP client cache for DoH servers, shared across all queries
-var (
-	dohClientsMu    sync.RWMutex
-	dohClientsCache map[string]*http.Client
-)
-
 const (
 	dnssecCheckDomain         = "dnssec-ok.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
@@ -281,7 +275,8 @@ func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 // performDoHQuery performs a DNS query over HTTPS (DoH).
 // It constructs an HTTP request with the DNS query message and sends it to the DoH server.
-func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+// If httpClient is nil, a new client is created for this query.
+func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true)
@@ -290,13 +285,6 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)}
 	}
-
-	var httpClient *http.Client
-	dohClientsMu.RLock()
-	if dohClientsCache != nil {
-		httpClient = dohClientsCache[serverInfo.Address]
-	}
-	dohClientsMu.RUnlock()
 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: timeout}
@@ -431,7 +419,7 @@ func performQueryImpl(serverInfo config.ServerInfo, domain string, qType uint16,
 	case config.DOT:
 		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
 	case config.DOH:
-		return performDoHQueryFunc(serverInfo, domain, qType, timeout)
+		return performDoHQueryFunc(serverInfo, domain, qType, timeout, nil)
 	case config.DOQ:
 		return performDoQQueryFunc(serverInfo, domain, qType, timeout)
 	default:
@@ -441,6 +429,25 @@ func performQueryImpl(serverInfo config.ServerInfo, domain string, qType uint16,
 
 // PerformQueryFunc is a variable holding the query function implementation, allowing mocking.
 var PerformQueryFunc = performQueryImpl
+
+// performQuery executes a DNS query with proper dependency injection for HTTP clients.
+func (b *Benchmarker) performQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	switch serverInfo.Protocol {
+	case config.UDP:
+		return performUDPQueryFunc(serverInfo, domain, qType, timeout)
+	case config.TCP:
+		return performTCPQueryFunc(serverInfo, domain, qType, timeout)
+	case config.DOT:
+		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
+	case config.DOH:
+		httpClient := b.dohClients[serverInfo.Address]
+		return performDoHQueryFunc(serverInfo, domain, qType, timeout, httpClient)
+	case config.DOQ:
+		return performDoQQueryFunc(serverInfo, domain, qType, timeout)
+	default:
+		return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
+	}
+}
 
 // queryJob represents a single query task.
 type queryJob struct {
@@ -493,10 +500,6 @@ func NewBenchmarker(cfg *config.Config) *Benchmarker {
 func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	servers := b.Config.Servers
 
-	dohClientsMu.Lock()
-	dohClientsCache = b.dohClients
-	dohClientsMu.Unlock()
-
 	b.prewarmConnections(servers)
 
 	// Initialize Results map
@@ -518,12 +521,8 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 // biasing the cached query results.
 func (b *Benchmarker) prewarmConnections(servers []config.ServerInfo) {
 	for _, server := range servers {
-		if server.Protocol == config.DOH {
-			_ = performDoHQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
-		} else if server.Protocol == config.DOT {
-			_ = performDoTQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
-		} else if server.Protocol == config.TCP {
-			_ = performTCPQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
+		if server.Protocol == config.DOH || server.Protocol == config.DOT || server.Protocol == config.TCP {
+			_ = b.performQuery(server, "example.com", dns.TypeA, b.Config.Timeout)
 		}
 	}
 }
@@ -733,14 +732,13 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
 	defer wg.Done()
 	for job := range jobs {
-		_ = b.Limiter.Wait(context.Background())                                                 // Apply rate limit
-		queryResult := PerformQueryFunc(job.serverInfo, job.domain, job.qType, b.Config.Timeout) // Use the variable
-		// Pass back identifying info
+		_ = b.Limiter.Wait(context.Background())
+		queryResult := b.performQuery(job.serverInfo, job.domain, job.qType, b.Config.Timeout)
 		results <- queryJobResult{
 			serverInfo: job.serverInfo,
 			result:     queryResult,
-			queryType:  job.queryType, // Will be zero value if it's a check job
-			checkType:  job.checkType, // Will be empty if it's a latency job
+			queryType:  job.queryType,
+			checkType:  job.checkType,
 		}
 	}
 }
