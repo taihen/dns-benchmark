@@ -31,6 +31,12 @@ var (
 	performDoQQueryFunc = performDoQQuery
 )
 
+// HTTP client cache for DoH servers, shared across all queries
+var (
+	dohClientsMu    sync.RWMutex
+	dohClientsCache map[string]*http.Client
+)
+
 const (
 	dnssecCheckDomain         = "dnssec-ok.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
@@ -285,7 +291,17 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		return QueryResult{Error: fmt.Errorf("failed to pack DoH message: %w", err)}
 	}
 
-	httpClient := &http.Client{Timeout: timeout}
+	var httpClient *http.Client
+	dohClientsMu.RLock()
+	if dohClientsCache != nil {
+		httpClient = dohClientsCache[serverInfo.Address]
+	}
+	dohClientsMu.RUnlock()
+
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: timeout}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -445,9 +461,10 @@ type queryJobResult struct {
 
 // Benchmarker manages the benchmarking process.
 type Benchmarker struct {
-	Config  *config.Config
-	Results *analysis.BenchmarkResults
-	Limiter *rate.Limiter
+	Config     *config.Config
+	Results    *analysis.BenchmarkResults
+	Limiter    *rate.Limiter
+	dohClients map[string]*http.Client // HTTP clients for DoH servers
 }
 
 // NewBenchmarker creates a new Benchmarker instance.
@@ -456,16 +473,31 @@ func NewBenchmarker(cfg *config.Config) *Benchmarker {
 	if cfg.RateLimit <= 0 {
 		limiter = rate.NewLimiter(rate.Inf, 0)
 	}
+
+	dohClients := make(map[string]*http.Client)
+	for _, server := range cfg.Servers {
+		if server.Protocol == config.DOH {
+			dohClients[server.Address] = &http.Client{Timeout: cfg.Timeout}
+		}
+	}
+
 	return &Benchmarker{
-		Config:  cfg,
-		Results: analysis.NewBenchmarkResults(),
-		Limiter: limiter,
+		Config:     cfg,
+		Results:    analysis.NewBenchmarkResults(),
+		Limiter:    limiter,
+		dohClients: dohClients,
 	}
 }
 
 // Run performs the benchmark against the configured servers.
 func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	servers := b.Config.Servers
+
+	dohClientsMu.Lock()
+	dohClientsCache = b.dohClients
+	dohClientsMu.Unlock()
+
+	b.prewarmDoHConnections(servers)
 
 	// Initialize Results map
 	for _, server := range servers {
@@ -479,6 +511,21 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 	b.runChecksConcurrently(servers)
 
 	return b.Results
+}
+
+// prewarmDoHConnections makes a dummy query to each DoH, DoT, and TCP server to establish
+// connections before running the benchmark. This prevents connection setup overhead from
+// biasing the cached query results.
+func (b *Benchmarker) prewarmDoHConnections(servers []config.ServerInfo) {
+	for _, server := range servers {
+		if server.Protocol == config.DOH {
+			_ = performDoHQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
+		} else if server.Protocol == config.DOT {
+			_ = performDoTQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
+		} else if server.Protocol == config.TCP {
+			_ = performTCPQueryFunc(server, "example.com", dns.TypeA, b.Config.Timeout)
+		}
+	}
 }
 
 // calculateLatencyQueryCounts determines the number of cached and uncached queries.
