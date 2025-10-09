@@ -232,9 +232,10 @@ func createSampleResults() *analysis.BenchmarkResults {
 	return res
 }
 
-func TestPrintConsoleResults(t *testing.T) {
+func TestWriteResults_Console(t *testing.T) {
 	results := createSampleResults()
 	cfg := &config.Config{
+		OutputFormat:        "console",
 		CheckDNSSEC:         true,
 		CheckNXDOMAIN:       true,
 		CheckRebinding:      true,
@@ -244,7 +245,8 @@ func TestPrintConsoleResults(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	PrintConsoleResults(&buf, results, cfg)
+	err := WriteResults(&buf, results, cfg)
+	require.NoError(t, err)
 	output := buf.String()
 
 	// Basic checks - presence of headers and server addresses
@@ -298,9 +300,10 @@ func TestPrintConsoleResults(t *testing.T) {
 	// We cannot easily test the os.Stdout case here, so we only test the buffer case.
 }
 
-func TestWriteCSVResults(t *testing.T) {
+func TestWriteResults_CSV(t *testing.T) {
 	results := createSampleResults()
 	cfg := &config.Config{
+		OutputFormat:      "csv",
 		CheckDNSSEC:       true,
 		CheckNXDOMAIN:     true,
 		CheckRebinding:    true,
@@ -309,7 +312,7 @@ func TestWriteCSVResults(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := WriteCSVResults(&buf, results, cfg)
+	err := WriteResults(&buf, results, cfg)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -386,9 +389,10 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "N/A", records[3][14]) // Accuracy
 }
 
-func TestWriteJSONResults(t *testing.T) {
+func TestWriteResults_JSON(t *testing.T) {
 	results := createSampleResults()
 	cfg := &config.Config{
+		OutputFormat:      "json",
 		CheckDNSSEC:       true,
 		CheckNXDOMAIN:     true,
 		CheckRebinding:    true,
@@ -397,7 +401,7 @@ func TestWriteJSONResults(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := WriteJSONResults(&buf, results, cfg)
+	err := WriteResults(&buf, results, cfg)
 	require.NoError(t, err)
 
 	var jsonOutput []JSONServerResult

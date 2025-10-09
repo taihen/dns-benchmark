@@ -17,9 +17,47 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
-// Formats and prints benchmark results to the console.
-// PrintConsoleResults formats and prints the benchmark results to the given writer.
-func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) {
+// GetWriter returns an io.Writer for the specified output file or standard output.
+// It also returns a cleanup function that should be deferred by the caller.
+func GetWriter(outputFile string, stdout io.Writer) (io.Writer, func(), error) {
+	if outputFile != "" {
+		file, err := os.Create(outputFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating output file %s: %w", outputFile, err)
+		}
+		cleanup := func() {
+			file.Close()
+		}
+		return file, cleanup, nil
+	}
+	// No cleanup needed for stdout
+	return stdout, func() {}, nil
+}
+
+// WriteResults dispatches the benchmark results to the correct output format function.
+func WriteResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
+	format := strings.ToLower(cfg.OutputFormat)
+	switch format {
+	case "console":
+		printConsoleResults(writer, results, cfg)
+		// Also print summary to stdout if output is not redirected
+		if writer == os.Stdout {
+			serverResults := getServerResultsSlice(results)
+			sortServerResults(serverResults)
+			printSummary(writer, serverResults, cfg)
+		}
+		return nil
+	case "csv":
+		return writeCSVResults(writer, results, cfg)
+	case "json":
+		return writeJSONResults(writer, results, cfg)
+	default:
+		return fmt.Errorf("unknown output format '%s'", cfg.OutputFormat)
+	}
+}
+
+// printConsoleResults formats and prints the benchmark results to the given writer.
+func printConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) {
 	serverResults := getServerResultsSlice(results)
 	sortServerResults(serverResults)
 
@@ -35,14 +73,10 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 	}
 
 	w.Flush()
-
-	if writer == os.Stdout {
-		printSummary(writer, serverResults, cfg)
-	}
 }
 
-// WriteCSVResults formats and writes the benchmark results to the given writer in CSV format.
-func WriteCSVResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
+// writeCSVResults formats and writes the benchmark results to the given writer in CSV format.
+func writeCSVResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
 	serverResults := getServerResultsSlice(results)
 	sortServerResults(serverResults)
 
@@ -63,8 +97,8 @@ func WriteCSVResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *
 	return csvWriter.Error()
 }
 
-// WriteJSONResults formats and writes the benchmark results to the given writer in JSON format.
-func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
+// writeJSONResults formats and writes the benchmark results to the given writer in JSON format.
+func writeJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
 	serverResults := getServerResultsSlice(results)
 	sortServerResults(serverResults)
 
