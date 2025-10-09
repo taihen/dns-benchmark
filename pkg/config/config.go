@@ -2,17 +2,26 @@ package config
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"regexp"
 	"runtime"
-	"strconv" // Added strconv import
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
+
+// initViper sets up Viper to read configuration from environment variables.
+func initViper() {
+	viper.SetEnvPrefix("DNS_BENCHMARK") // e.g., DNS_BENCHMARK_TIMEOUT
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+}
 
 // ProtocolType defines the DNS protocol.
 type ProtocolType string
@@ -70,26 +79,26 @@ var resolvConfNameserverRegex = regexp.MustCompile(`^\s*nameserver\s+([^\s]+)\s*
 
 // Config holds the application configuration derived from flags and files.
 type Config struct {
-	ServersFile         string
-	Servers             []ServerInfo
-	NumQueries          int
-	Timeout             time.Duration
-	Concurrency         int
-	RateLimit           int
-	QueryType           string
-	Domain              string // Domain for cached latency tests
-	CheckDNSSEC         bool
-	CheckNXDOMAIN       bool
-	Verbose             bool
-	OutputFile          string
-	OutputFormat        string
-	IncludeSystemDNS    bool
-	CheckRebinding      bool
-	AccuracyCheckFile   string
-	AccuracyCheckDomain string
-	AccuracyCheckIP     string
-	CheckDotcom         bool
-	ShowVersion         bool
+	ServersFile         string       `mapstructure:"f"`
+	Servers             []ServerInfo // This will be populated manually
+	NumQueries          int          `mapstructure:"n"`
+	Timeout             time.Duration `mapstructure:"t"`
+	Concurrency         int          `mapstructure:"c"`
+	RateLimit           int          `mapstructure:"rate"`
+	QueryType           string       `mapstructure:"type"`
+	Domain              string       `mapstructure:"domain"`
+	CheckDNSSEC         bool         `mapstructure:"dnssec"`
+	CheckNXDOMAIN       bool         `mapstructure:"nxdomain"`
+	Verbose             bool         `mapstructure:"v"`
+	OutputFile          string       `mapstructure:"o"`
+	OutputFormat        string       `mapstructure:"format"`
+	IncludeSystemDNS    bool         `mapstructure:"system"`
+	CheckRebinding      bool         `mapstructure:"rebinding"`
+	AccuracyCheckFile   string       `mapstructure:"accuracy-file"`
+	AccuracyCheckDomain string       // Populated manually
+	AccuracyCheckIP     string       // Populated manually
+	CheckDotcom         bool         `mapstructure:"dotcom"`
+	ShowVersion         bool         `mapstructure:"version"`
 }
 
 // DefaultDNSStrings provides a list of common public DNS endpoints.
@@ -122,37 +131,40 @@ var DefaultDNSStrings = []string{
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
 func LoadConfig() *Config {
+	initViper() // Set up environment variable reading
+
+	// Define flags using pflag
+	pflag.StringP("f", "f", "", "Path to file with DNS server endpoints")
+	pflag.IntP("n", "n", 10, "Number of latency queries per server")
+	pflag.DurationP("t", "t", 5*time.Second, "Query timeout")
+	pflag.IntP("c", "c", 5, "Max concurrent queries/checks")
+	pflag.Int("rate", 50, "Max queries per second (0 for unlimited)")
+	pflag.String("type", "A", "DNS record type for latency queries")
+	pflag.String("domain", "example.com", "Domain for cached latency test")
+	pflag.Bool("dnssec", false, "Check for DNSSEC support")
+	pflag.Bool("nxdomain", false, "Check for NXDOMAIN hijacking")
+	pflag.Bool("rebinding", false, "Check for DNS rebinding protection")
+	pflag.Bool("dotcom", false, "Perform '.com' TLD lookup time check")
+	pflag.String("accuracy-file", "", "Path to file for accuracy check")
+	pflag.BoolP("v", "v", false, "Enable verbose output")
+	pflag.StringP("o", "o", "", "Path to output file (CSV/JSON)")
+	pflag.String("format", "console", "Output format (console, csv, json)")
+	pflag.Bool("system", true, "Include system DNS servers (UDP only)")
+	pflag.Bool("version", false, "Print version and exit")
+
+	// Bind flags to Viper
+	pflag.VisitAll(func(f *pflag.Flag) {
+		viper.BindPFlag(f.Name, f)
+	})
+
+	pflag.Parse()
+
+	// Create config struct and unmarshal Viper data into it
 	cfg := &Config{}
-
-	flag.StringVar(
-		&cfg.ServersFile,
-		"f",
-		"",
-		"Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)",
-	)
-	flag.IntVar(&cfg.NumQueries, "n", 10, "Number of latency queries per server (min 2 for stddev)")
-	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
-	flag.IntVar(&cfg.Concurrency, "c", 5, "Max concurrent queries/checks")
-	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
-	flag.StringVar(&cfg.QueryType, "type", "A", "DNS record type for latency queries")
-	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for cached latency test")
-	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", false, "Check for DNSSEC support")
-	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
-	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
-	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Perform '.com' TLD lookup time check")
-	flag.StringVar(
-		&cfg.AccuracyCheckFile,
-		"accuracy-file",
-		"",
-		"Path to file for accuracy check (domain IP per line, uses first valid entry)",
-	)
-	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose output")
-	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (CSV/JSON)")
-	flag.StringVar(&cfg.OutputFormat, "format", "console", "Output format (console, csv, json)")
-	flag.BoolVar(&cfg.IncludeSystemDNS, "system", true, "Include system DNS servers (UDP only)")
-	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
-
-	flag.Parse()
+	if err := viper.Unmarshal(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error unmarshaling config: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Load accuracy check data first
 	if cfg.AccuracyCheckFile != "" {
