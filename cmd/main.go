@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	// Internal packages structured according to standard Go project layout
-	"github.com/taihen/dns-benchmark/pkg/analysis"
 	"github.com/taihen/dns-benchmark/pkg/config"
 	"github.com/taihen/dns-benchmark/pkg/dnsquery"
 	"github.com/taihen/dns-benchmark/pkg/output"
@@ -28,7 +27,7 @@ func main() {
 	fmt.Printf("DNS Benchmark %s\n", version) // Removed 'v' prefix here
 	fmt.Println("Running benchmark...")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
-	var results *analysis.BenchmarkResults = benchmarker.Run()
+	results := benchmarker.Run()
 	fmt.Println("Benchmark finished.")
 	fmt.Println("---")
 
@@ -44,7 +43,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error creating output file %s: %v\n", cfg.OutputFile, err)
 			os.Exit(1)
 		}
-		defer outputWriter.Close()
+		defer func() { _ = outputWriter.Close() }()
 		fmt.Printf("Writing results to %s...\n", cfg.OutputFile)
 	}
 

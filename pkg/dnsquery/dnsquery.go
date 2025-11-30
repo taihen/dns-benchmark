@@ -19,6 +19,8 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/taihen/dns-benchmark/pkg/analysis"
 	"github.com/taihen/dns-benchmark/pkg/config"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"golang.org/x/time/rate"
 )
 
@@ -113,7 +115,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 				(now.Sub(conn.createdAt) > connectionTTL ||
 					now.Sub(conn.lastUsed) > maxIdleTime) {
 				if conn.session != nil {
-					conn.session.CloseWithError(0, "cleanup")
+					_ = conn.session.CloseWithError(0, "cleanup")
 				}
 				continue
 			}
@@ -205,7 +207,7 @@ func (p *quicConnectionPool) closeAllConnections() {
 	for _, conns := range p.connections {
 		for _, conn := range conns {
 			if conn.session != nil {
-				conn.session.CloseWithError(0, "shutdown")
+				_ = conn.session.CloseWithError(0, "shutdown")
 			}
 		}
 	}
@@ -312,7 +314,7 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		}
 		return QueryResult{Error: fmt.Errorf("doh http request failed: %w", err)}
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
 		return QueryResult{Error: fmt.Errorf("doh query failed with status code %d", httpResp.StatusCode)}
@@ -374,7 +376,7 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		stream.CancelRead(0) // Cancel reading if write fails
 		return QueryResult{Error: fmt.Errorf("doq failed to write query: %w", err)}
 	}
-	stream.Close() // Close write side
+	_ = stream.Close() // Close write side
 
 	// Read response length prefix
 	lenBuf := make([]byte, 2)
@@ -703,7 +705,7 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 	}
 
 	if res.result.Error != nil && b.Config.Verbose {
-		fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.Title(res.checkType), serverKey, res.result.Error)
+		fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", cases.Title(language.English).String(res.checkType), serverKey, res.result.Error)
 	}
 
 	// Update results based on check type

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -377,7 +378,7 @@ func createTempFile(t *testing.T, content string) string {
 	}
 	_, err = tmpFile.WriteString(content)
 	if err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
 	err = tmpFile.Close()
@@ -436,7 +437,7 @@ func TestReadServerStringsFromFile(t *testing.T) {
 				filePath = filepath.Join(t.TempDir(), "nonexistent.txt")
 			} else {
 				filePath = createTempFile(t, tt.fileContent)
-				defer os.Remove(filePath)
+				defer func() { _ = os.Remove(filePath) }()
 			}
 
 			got, err := readServerStringsFromFile(filePath)
@@ -655,7 +656,7 @@ func TestLoadAccuracyCheckFile(t *testing.T) {
 				filePath = filepath.Join(t.TempDir(), "nonexistent-accuracy.txt")
 			} else {
 				filePath = createTempFile(t, tt.fileContent)
-				defer os.Remove(filePath)
+				defer func() { _ = os.Remove(filePath) }()
 			}
 
 			gotDomain, gotIP, err := loadAccuracyCheckFile(filePath)
@@ -818,17 +819,15 @@ func TestGetSystemDNSServers_Unix(t *testing.T) {
 				simulatedWantErr = true
 			}
 
-			if simulatedWantErr != tt.wantErr {
-				// This indicates a mismatch between the test case expectation
-				// and what the simulation predicts based *only* on content.
-				// It doesn't test the actual file opening part of getSystemDNSServers.
-			}
+			// Note: simulatedWantErr vs tt.wantErr comparison is informational only.
+			// This simulation tests content parsing, not file opening.
+			_ = simulatedWantErr // Mark as intentionally unused for linting
 			if !reflect.DeepEqual(simulatedGot, tt.want) {
 				t.Errorf("getSystemDNSServers() simulated got = %v, want %v", simulatedGot, tt.want)
 			}
 
 			// Clean up the temporary file
-			os.Remove(resolvPath)
+			_ = os.Remove(resolvPath)
 		})
 	}
 	_ = originalPath // Use originalPath to avoid unused variable error
@@ -836,3 +835,176 @@ func TestGetSystemDNSServers_Unix(t *testing.T) {
 
 // TODO: Add tests for LoadConfig itself, mocking file reads and flag parsing.
 // This requires more setup (e.g., setting os.Args, mocking os.Open).
+
+func TestIsValidHostname(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostname string
+		want     bool
+	}{
+		{"empty string", "", false},
+		{"valid domain", "example.com", true},
+		{"valid subdomain", "sub.example.com", true},
+		{"ipv4 address", "192.168.1.1", true},
+		{"ipv6 address", "2001:db8::1", true},
+		{"localhost", "localhost", true},
+		{"single label", "myhost", true},
+		{"label too long", strings.Repeat("a", 64) + ".com", false},
+		{"total too long", strings.Repeat("a.", 128) + "com", false},
+		{"empty label", "example..com", false},
+		{"starts with hyphen", "-example.com", false},
+		{"ends with hyphen", "example-.com", false},
+		{"numeric only single label", "12345", false},
+		{"contains space", "example .com", false},
+		{"contains colon", "example:com", false},
+		{"contains slash", "example/com", false},
+		{"valid with numbers", "example123.com", true},
+		{"valid with hyphens", "my-example.com", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidHostname(tt.hostname)
+			if got != tt.want {
+				t.Errorf("isValidHostname(%q) = %v, want %v", tt.hostname, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintVerboseConfig(t *testing.T) {
+	// Capture stdout to verify output
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	cfg := &Config{
+		ServersFile:         "servers.txt",
+		Servers:             []ServerInfo{{Address: "1.1.1.1:53", Protocol: UDP}},
+		NumQueries:          10,
+		Timeout:             5 * 1000000000, // 5 seconds
+		Concurrency:         5,
+		RateLimit:           50,
+		QueryType:           "A",
+		Domain:              "example.com",
+		CheckDNSSEC:         true,
+		CheckNXDOMAIN:       true,
+		CheckRebinding:      true,
+		CheckDotcom:         true,
+		AccuracyCheckFile:   "accuracy.txt",
+		AccuracyCheckDomain: "test.local.",
+		AccuracyCheckIP:     "1.2.3.4",
+		IncludeSystemDNS:    true,
+		OutputFormat:        "console",
+		OutputFile:          "output.txt",
+	}
+
+	printVerboseConfig(cfg)
+
+	// Close writer and restore stdout
+	_ = w.Close()
+	os.Stdout = oldStdout
+
+	// Read captured output
+	var outBuf []byte
+	outBuf, _ = io.ReadAll(r)
+	output := string(outBuf)
+
+	// Verify key parts of output
+	if !strings.Contains(output, "--- Configuration ---") {
+		t.Error("Expected configuration header in output")
+	}
+	if !strings.Contains(output, "Servers File:") {
+		t.Error("Expected servers file info in output")
+	}
+	if !strings.Contains(output, "Num Queries:") {
+		t.Error("Expected num queries info in output")
+	}
+	if !strings.Contains(output, "Check DNSSEC:") {
+		t.Error("Expected DNSSEC check info in output")
+	}
+	if !strings.Contains(output, "Accuracy Check:    Enabled") {
+		t.Error("Expected accuracy check enabled info in output")
+	}
+}
+
+func TestPrintVerboseConfigNoAccuracy(t *testing.T) {
+	// Capture stdout to verify output
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	cfg := &Config{
+		Servers:           []ServerInfo{{Address: "1.1.1.1:53", Protocol: UDP}},
+		NumQueries:        10,
+		Timeout:           5 * 1000000000, // 5 seconds
+		Concurrency:       5,
+		RateLimit:         50,
+		QueryType:         "A",
+		Domain:            "example.com",
+		AccuracyCheckFile: "", // Disabled
+		OutputFormat:      "console",
+	}
+
+	printVerboseConfig(cfg)
+
+	// Close writer and restore stdout
+	_ = w.Close()
+	os.Stdout = oldStdout
+
+	// Read captured output
+	var outBuf []byte
+	outBuf, _ = io.ReadAll(r)
+	output := string(outBuf)
+
+	// Verify accuracy check is disabled
+	if !strings.Contains(output, "Accuracy Check:    Disabled") {
+		t.Error("Expected accuracy check disabled info in output")
+	}
+}
+
+func TestServerInfoStringExtended(t *testing.T) {
+	tests := []struct {
+		name string
+		si   ServerInfo
+		want string
+	}{
+		{
+			"dot with hostname",
+			ServerInfo{Address: "dns.google:853", Protocol: DOT, Hostname: "dns.google"},
+			"tls://dns.google:853",
+		},
+		{
+			"dot with ip hostname",
+			ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"},
+			"tls://1.1.1.1:853",
+		},
+		{
+			"doq with hostname",
+			ServerInfo{Address: "dns.adguard-dns.com:853", Protocol: DOQ, Hostname: "dns.adguard-dns.com"},
+			"quic://dns.adguard-dns.com:853",
+		},
+		{
+			"doq with ip hostname",
+			ServerInfo{Address: "94.140.14.14:853", Protocol: DOQ, Hostname: "94.140.14.14"},
+			"quic://94.140.14.14:853",
+		},
+		{
+			"dot with invalid address format",
+			ServerInfo{Address: "invalid-no-port", Protocol: DOT, Hostname: "dns.google"},
+			"tls://dns.google:853",
+		},
+		{
+			"doq with invalid address format",
+			ServerInfo{Address: "invalid-no-port", Protocol: DOQ, Hostname: "dns.adguard.com"},
+			"quic://dns.adguard.com:853",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.si.String(); got != tt.want {
+				t.Errorf("ServerInfo.String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
