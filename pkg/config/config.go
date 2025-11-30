@@ -130,7 +130,7 @@ func LoadConfig() *Config {
 		"",
 		"Path to file with DNS server endpoints (one per line: IP, tcp://IP, tls://IP, https://..., quic://IP)",
 	)
-	flag.IntVar(&cfg.NumQueries, "n", 10, "Number of latency queries per server (min 2 for stddev)")
+	flag.IntVar(&cfg.NumQueries, "n", 50, "Number of latency queries per server (min 2 for stddev)")
 	flag.DurationVar(&cfg.Timeout, "t", 5*time.Second, "Query timeout")
 	flag.IntVar(&cfg.Concurrency, "c", 5, "Max concurrent queries/checks")
 	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
@@ -250,7 +250,7 @@ func readServerStringsFromFile(filePath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var servers []string
 	scanner := bufio.NewScanner(file)
@@ -311,7 +311,7 @@ func isValidHostname(hostname string) bool {
 			isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 			isDigit := r >= '0' && r <= '9'
 			isHyphen := r == '-'
-			if !(isLetter || isDigit || isHyphen) {
+			if !isLetter && !isDigit && !isHyphen {
 				return false
 			}
 		}
@@ -389,7 +389,8 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 	}
 
 	// Now addrPart should be host, ip, [ipv6], host:port, ip:port, or [ipv6]:port
-	host, port, err := net.SplitHostPort(addrPart)
+	var host string
+	_, port, err := net.SplitHostPort(addrPart)
 	hostname := ""
 	if err == nil {
 		// Remove brackets from IPv6 literal, set both host and hostname to unbracketed form
@@ -499,7 +500,7 @@ func getSystemDNSServers() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not open %s: %w", resolvConfPath, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var servers []string
 	scanner := bufio.NewScanner(file)
@@ -529,7 +530,7 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 	if err != nil {
 		return "", "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0

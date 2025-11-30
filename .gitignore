@@ -16,3 +16,7 @@ vendor/
 # Go workspace
 *.work
 *.work.sum
+
+# Coverage reports
+coverage.out
+coverage.html

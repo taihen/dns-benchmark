@@ -478,3 +478,503 @@ func TestWriteJSONResults(t *testing.T) {
 }
 
 // --- Additional tests ---
+
+func TestFindBestServer(t *testing.T) {
+	bTrue := true
+	bFalse := false
+
+	tests := []struct {
+		name           string
+		results        []*analysis.ServerResult
+		cfg            *config.Config
+		wantServerAddr string
+	}{
+		{
+			name:           "no results",
+			results:        []*analysis.ServerResult{},
+			cfg:            &config.Config{},
+			wantServerAddr: "",
+		},
+		{
+			name: "single reliable server",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "1.1.1.1:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "1.1.1.1:53",
+		},
+		{
+			name: "skip unreliable server",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "unreliable.server:53",
+					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+					AvgUncachedLatency: 10 * time.Millisecond,
+					Reliability:        50.0, // Below 99% threshold
+				},
+				{
+					ServerAddress:      "reliable.server:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "reliable.server:53",
+		},
+		{
+			name: "skip inaccurate server",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "inaccurate.server:53",
+					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+					AvgUncachedLatency: 10 * time.Millisecond,
+					Reliability:        100.0,
+					IsAccurate:         &bFalse,
+				},
+				{
+					ServerAddress:      "accurate.server:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+					IsAccurate:         &bTrue,
+				},
+			},
+			cfg:            &config.Config{AccuracyCheckFile: "enabled"},
+			wantServerAddr: "accurate.server:53",
+		},
+		{
+			name: "prefer faster uncached latency",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "slower.server:53",
+					UncachedLatencies:  []time.Duration{50 * time.Millisecond},
+					AvgUncachedLatency: 50 * time.Millisecond,
+					Reliability:        100.0,
+				},
+				{
+					ServerAddress:      "faster.server:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "faster.server:53",
+		},
+		{
+			name: "fallback to cached latency when uncached equal",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "slower-cached.server:53",
+					CachedLatencies:    []time.Duration{30 * time.Millisecond},
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgCachedLatency:   30 * time.Millisecond,
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+				{
+					ServerAddress:      "faster-cached.server:53",
+					CachedLatencies:    []time.Duration{10 * time.Millisecond},
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgCachedLatency:   10 * time.Millisecond,
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "faster-cached.server:53",
+		},
+		{
+			name: "all unreliable returns nil",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "unreliable1:53",
+					Reliability:   50.0,
+				},
+				{
+					ServerAddress: "unreliable2:53",
+					Reliability:   80.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findBestServer(tt.results, tt.cfg)
+			if tt.wantServerAddr == "" {
+				assert.Nil(t, result, "Expected no best server")
+			} else {
+				require.NotNil(t, result, "Expected a best server")
+				assert.Equal(t, tt.wantServerAddr, result.ServerAddress)
+			}
+		})
+	}
+}
+
+func TestCompareUncachedLatency(t *testing.T) {
+	tests := []struct {
+		name           string
+		current        *analysis.ServerResult
+		best           *analysis.ServerResult
+		lowestUncached time.Duration
+		want           bool
+	}{
+		{
+			name: "current has uncached, best doesn't",
+			current: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgUncachedLatency: 10 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				UncachedLatencies: []time.Duration{},
+			},
+			lowestUncached: time.Duration(1<<63 - 1),
+			want:           true,
+		},
+		{
+			name: "best has uncached, current doesn't",
+			current: &analysis.ServerResult{
+				UncachedLatencies: []time.Duration{},
+			},
+			best: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgUncachedLatency: 10 * time.Millisecond,
+			},
+			lowestUncached: 10 * time.Millisecond,
+			want:           false,
+		},
+		{
+			name: "current faster than best",
+			current: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{5 * time.Millisecond},
+				AvgUncachedLatency: 5 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgUncachedLatency: 10 * time.Millisecond,
+			},
+			lowestUncached: 10 * time.Millisecond,
+			want:           true,
+		},
+		{
+			name: "current slower than best",
+			current: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{15 * time.Millisecond},
+				AvgUncachedLatency: 15 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgUncachedLatency: 10 * time.Millisecond,
+			},
+			lowestUncached: 10 * time.Millisecond,
+			want:           false,
+		},
+		{
+			name: "neither has uncached",
+			current: &analysis.ServerResult{
+				UncachedLatencies: []time.Duration{},
+			},
+			best: &analysis.ServerResult{
+				UncachedLatencies: []time.Duration{},
+			},
+			lowestUncached: time.Duration(1<<63 - 1),
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := compareUncachedLatency(tt.current, tt.best, tt.lowestUncached)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCompareCachedLatency(t *testing.T) {
+	tests := []struct {
+		name    string
+		current *analysis.ServerResult
+		best    *analysis.ServerResult
+		want    bool
+	}{
+		{
+			name: "current has cached, best doesn't",
+			current: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgCachedLatency: 10 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				CachedLatencies: []time.Duration{},
+			},
+			want: true,
+		},
+		{
+			name: "best has cached, current doesn't",
+			current: &analysis.ServerResult{
+				CachedLatencies: []time.Duration{},
+			},
+			best: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgCachedLatency: 10 * time.Millisecond,
+			},
+			want: false,
+		},
+		{
+			name: "current faster cached",
+			current: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{5 * time.Millisecond},
+				AvgCachedLatency: 5 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgCachedLatency: 10 * time.Millisecond,
+			},
+			want: true,
+		},
+		{
+			name: "current slower cached",
+			current: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{15 * time.Millisecond},
+				AvgCachedLatency: 15 * time.Millisecond,
+			},
+			best: &analysis.ServerResult{
+				CachedLatencies:  []time.Duration{10 * time.Millisecond},
+				AvgCachedLatency: 10 * time.Millisecond,
+			},
+			want: false,
+		},
+		{
+			name: "neither has cached",
+			current: &analysis.ServerResult{
+				CachedLatencies: []time.Duration{},
+			},
+			best: &analysis.ServerResult{
+				CachedLatencies: []time.Duration{},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := compareCachedLatency(tt.current, tt.best)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPrintSummary(t *testing.T) {
+	bTrue := true
+	bFalse := false
+	dotcomLatency := 15 * time.Millisecond
+
+	tests := []struct {
+		name         string
+		results      *analysis.BenchmarkResults
+		cfg          *config.Config
+		wantContains []string
+		wantAbsent   []string
+	}{
+		{
+			name: "with best server",
+			results: func() *analysis.BenchmarkResults {
+				res := analysis.NewBenchmarkResults()
+				res.Results["1.1.1.1:53"] = &analysis.ServerResult{
+					ServerAddress:         "1.1.1.1:53",
+					CachedLatencies:       []time.Duration{10 * time.Millisecond},
+					UncachedLatencies:     []time.Duration{20 * time.Millisecond},
+					AvgCachedLatency:      10 * time.Millisecond,
+					AvgUncachedLatency:    20 * time.Millisecond,
+					StdDevCachedLatency:   1 * time.Millisecond,
+					StdDevUncachedLatency: 2 * time.Millisecond,
+					Reliability:           100.0,
+					DotcomLatency:         &dotcomLatency,
+				}
+				return res
+			}(),
+			cfg: &config.Config{CheckDotcom: true},
+			wantContains: []string{
+				"--- Conclusion ---",
+				"Fastest reliable server",
+				"1.1.1.1:53",
+				"Avg Uncached Latency",
+				"Avg Cached Latency",
+				".com Latency",
+				"Reliability: 100.0%",
+			},
+		},
+		{
+			name: "no reliable servers",
+			results: func() *analysis.BenchmarkResults {
+				res := analysis.NewBenchmarkResults()
+				res.Results["unreliable:53"] = &analysis.ServerResult{
+					ServerAddress: "unreliable:53",
+					Reliability:   50.0,
+				}
+				return res
+			}(),
+			cfg: &config.Config{},
+			wantContains: []string{
+				"--- Conclusion ---",
+				"Could not determine a best server",
+			},
+			wantAbsent: []string{
+				"Fastest reliable server",
+			},
+		},
+		{
+			name:    "empty results",
+			results: analysis.NewBenchmarkResults(),
+			cfg:     &config.Config{},
+			wantAbsent: []string{
+				"--- Conclusion ---",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			serverResults := getServerResultsSlice(tt.results)
+			sortServerResults(serverResults)
+			printSummary(&buf, serverResults, tt.cfg)
+			output := buf.String()
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, output, want, "Expected output to contain: %s", want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, output, absent, "Expected output to not contain: %s", absent)
+			}
+		})
+	}
+	// Use variables to avoid unused warnings
+	_ = bTrue
+	_ = bFalse
+}
+
+func TestPrintServerWarnings(t *testing.T) {
+	bTrue := true
+	bFalse := false
+
+	tests := []struct {
+		name         string
+		results      []*analysis.ServerResult
+		bestServer   *analysis.ServerResult
+		cfg          *config.Config
+		wantContains []string
+		wantAbsent   []string
+	}{
+		{
+			name: "warning for low reliability",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "unreliable:53",
+					Reliability:   50.0,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{},
+			wantContains: []string{
+				"Warning (unreliable:53): Low reliability (50.0%)",
+			},
+		},
+		{
+			name: "warning for NXDOMAIN hijacking",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:   "hijacker:53",
+					Reliability:     100.0,
+					HijacksNXDOMAIN: &bTrue,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{CheckNXDOMAIN: true},
+			wantContains: []string{
+				"Warning (hijacker:53): Appears to hijack NXDOMAIN responses",
+			},
+		},
+		{
+			name: "warning for rebinding vulnerability",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:   "vulnerable:53",
+					Reliability:     100.0,
+					BlocksRebinding: &bFalse,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{CheckRebinding: true},
+			wantContains: []string{
+				"Warning (vulnerable:53): Allows responses with private IPs (rebinding risk)",
+			},
+		},
+		{
+			name: "warning for inaccurate results",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "inaccurate:53",
+					Reliability:   100.0,
+					IsAccurate:    &bFalse,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{AccuracyCheckFile: "enabled", AccuracyCheckDomain: "test.local."},
+			wantContains: []string{
+				"Warning (inaccurate:53): Returned inaccurate results for test.local.",
+			},
+		},
+		{
+			name: "no issues besides best server",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "good:53",
+					Reliability:   100.0,
+				},
+			},
+			bestServer: &analysis.ServerResult{ServerAddress: "best:53"},
+			cfg:        &config.Config{},
+			wantContains: []string{
+				"Other tested servers performed reliably",
+			},
+		},
+		{
+			name: "skip best server in warnings",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "best:53",
+					Reliability:   100.0,
+				},
+			},
+			bestServer: &analysis.ServerResult{ServerAddress: "best:53"},
+			cfg:        &config.Config{},
+			wantAbsent: []string{
+				"Warning (best:53)",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printServerWarnings(&buf, tt.results, tt.bestServer, tt.cfg)
+			output := buf.String()
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, output, want, "Expected output to contain: %s", want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, output, absent, "Expected output to not contain: %s", absent)
+			}
+		})
+	}
+}

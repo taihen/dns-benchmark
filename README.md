@@ -51,7 +51,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Use built-in list of common public resolvers (Cloudflare, Google, Quad9, Adguard).
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
-  - Adjust number of queries (`-n`, default: 4), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
+  - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table with results sorted by uncached latency.
   - Console summary recommending the fastest reliable server and highlighting potential issues.

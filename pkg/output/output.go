@@ -26,15 +26,15 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 	w := tabwriter.NewWriter(writer, 0, 0, 2, ' ', 0)
 
 	header := buildHeader(cfg)
-	fmt.Fprintln(w, strings.Join(header, "\t"))
-	fmt.Fprintln(w, strings.Repeat("-\t", len(header)))
+	_, _ = fmt.Fprintln(w, strings.Join(header, "\t"))
+	_, _ = fmt.Fprintln(w, strings.Repeat("-\t", len(header)))
 
 	for _, res := range serverResults {
 		row := buildRow(res, cfg)
-		fmt.Fprintln(w, strings.Join(row, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
 
-	w.Flush()
+	_ = w.Flush()
 
 	if writer == os.Stdout {
 		printSummary(writer, serverResults, cfg)
@@ -302,32 +302,32 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 		return
 	}
 
-	fmt.Fprintln(writer, "\n--- Conclusion ---")
+	_, _ = fmt.Fprintln(writer, "\n--- Conclusion ---")
 
 	bestServer := findBestServer(results, cfg)
 
 	// Report best server results
 	if bestServer != nil {
-		fmt.Fprintf(writer, "Fastest reliable server (based on uncached latency & accuracy): %s\n", bestServer.ServerAddress)
-		fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
+		_, _ = fmt.Fprintf(writer, "Fastest reliable server (based on uncached latency & accuracy): %s\n", bestServer.ServerAddress)
+		_, _ = fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgUncachedLatency, len(bestServer.UncachedLatencies) > 0),
 			formatStdDev(bestServer.StdDevUncachedLatency, len(bestServer.UncachedLatencies) > 1))
-		fmt.Fprintf(writer, "  Avg Cached Latency:   %s (StdDev: %s)\n",
+		_, _ = fmt.Fprintf(writer, "  Avg Cached Latency:   %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgCachedLatency, len(bestServer.CachedLatencies) > 0),
 			formatStdDev(bestServer.StdDevCachedLatency, len(bestServer.CachedLatencies) > 1))
 		if cfg.CheckDotcom && bestServer.DotcomLatency != nil {
-			fmt.Fprintf(writer, "  .com Latency:         %s\n", formatDurationPointer(bestServer.DotcomLatency))
+			_, _ = fmt.Fprintf(writer, "  .com Latency:         %s\n", formatDurationPointer(bestServer.DotcomLatency))
 		}
-		fmt.Fprintf(writer, "  Reliability: %.1f%%\n", bestServer.Reliability)
+		_, _ = fmt.Fprintf(writer, "  Reliability: %.1f%%\n", bestServer.Reliability)
 	} else {
-		fmt.Fprintln(writer, "Could not determine a best server meeting reliability and accuracy criteria.")
+		_, _ = fmt.Fprintln(writer, "Could not determine a best server meeting reliability and accuracy criteria.")
 		// TODO: Optionally report the most reliable server regardless of other criteria if no 'best' is found.
 	}
 
 	// Report warnings for other servers
 	printServerWarnings(writer, results, bestServer, cfg)
 
-	fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
+	_, _ = fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
 }
 
 // findBestServer identifies the best server based on reliability, accuracy, and latency.
@@ -425,19 +425,19 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 		warningPrefix := fmt.Sprintf("Warning (%s):", res.ServerAddress)
 		serverIssues := false
 		if res.Reliability < reliabilityThreshold {
-			fmt.Fprintf(writer, "%s Low reliability (%.1f%%).\n", warningPrefix, res.Reliability)
+			_, _ = fmt.Fprintf(writer, "%s Low reliability (%.1f%%).\n", warningPrefix, res.Reliability)
 			serverIssues = true
 		}
 		if cfg.CheckNXDOMAIN && res.HijacksNXDOMAIN != nil && *res.HijacksNXDOMAIN {
-			fmt.Fprintf(writer, "%s Appears to hijack NXDOMAIN responses.\n", warningPrefix)
+			_, _ = fmt.Fprintf(writer, "%s Appears to hijack NXDOMAIN responses.\n", warningPrefix)
 			serverIssues = true
 		}
 		if cfg.CheckRebinding && res.BlocksRebinding != nil && !*res.BlocksRebinding {
-			fmt.Fprintf(writer, "%s Allows responses with private IPs (rebinding risk).\n", warningPrefix)
+			_, _ = fmt.Fprintf(writer, "%s Allows responses with private IPs (rebinding risk).\n", warningPrefix)
 			serverIssues = true
 		}
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
-			fmt.Fprintf(writer, "%s Returned inaccurate results for %s.\n", warningPrefix, cfg.AccuracyCheckDomain)
+			_, _ = fmt.Fprintf(writer, "%s Returned inaccurate results for %s.\n", warningPrefix, cfg.AccuracyCheckDomain)
 			serverIssues = true
 		}
 		if serverIssues {
@@ -446,7 +446,7 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 	}
 
 	if !issuesFound && bestServer != nil {
-		fmt.Fprintln(writer, "Other tested servers performed reliably without major issues detected.")
+		_, _ = fmt.Fprintln(writer, "Other tested servers performed reliably without major issues detected.")
 	}
 }
 
