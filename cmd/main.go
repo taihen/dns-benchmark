@@ -27,6 +27,7 @@ func main() {
 	fmt.Printf("DNS Benchmark %s\n", version) // Removed 'v' prefix here
 	fmt.Println("Running benchmark...")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
+	defer benchmarker.Close()
 	results := benchmarker.Run()
 	fmt.Println("Benchmark finished.")
 	fmt.Println("---")
@@ -64,8 +65,6 @@ func main() {
 	// Handle potential errors during file writing for CSV/JSON
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s output: %v\n", format, err)
-		// Cleanup QUIC connection pool before exit
-		dnsquery.CleanupQuicPool()
 		// Attempt to remove partially written file? Maybe not necessary.
 		os.Exit(1)
 	}
@@ -74,9 +73,6 @@ func main() {
 	if outputWriter != os.Stdout {
 		fmt.Println("Done.")
 	}
-
-	// Cleanup QUIC connection pool before exit
-	dnsquery.CleanupQuicPool()
 
 	os.Exit(0) // Exit successfully
 }
