@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -554,6 +555,20 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 				t.Errorf("parseAndDeduplicateServers() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultDNSStringsDoesNotIncludeDNS0EU(t *testing.T) {
+	disallowed := []string{
+		"193.110.81.0",
+		"185.253.5.0",
+		"tls://dns0.eu",
+	}
+
+	for _, entry := range disallowed {
+		if slices.Contains(DefaultDNSStrings, entry) {
+			t.Fatalf("DefaultDNSStrings contains deprecated entry %q", entry)
+		}
 	}
 }
 
