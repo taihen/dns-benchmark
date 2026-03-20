@@ -90,6 +90,12 @@ func createARecord(name string, ip string) *dns.A {
 	}
 }
 
+func nxdomainResponse() *dns.Msg {
+	msg := new(dns.Msg)
+	msg.Rcode = dns.RcodeNameError
+	return msg
+}
+
 func TestPerformQueryWithClient_Success(t *testing.T) {
 	serverAddr := "1.2.3.4:53"
 	domain := "example.com."
@@ -314,34 +320,50 @@ func TestPerformDoHQuery_BadStatus(t *testing.T) {
 
 // --- Testing Check Helper Functions ---
 
-func TestCheckADFlag(t *testing.T) {
+func TestCheckDNSSECValidation(t *testing.T) {
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
 
-	respAD := createTestResponse(req, dns.RcodeSuccess)
-	respAD.AuthenticatedData = true
-
-	respNoAD := createTestResponse(req, dns.RcodeSuccess)
-	respNoAD.AuthenticatedData = false
-
-	respErr := createTestResponse(req, dns.RcodeServerFailure)
+	respValidated := createTestResponse(req, dns.RcodeServerFailure)
+	respNotValidated := createTestResponse(req, dns.RcodeSuccess, createARecord("example.com.", "93.184.216.34"))
+	respInconclusive := createTestResponse(req, dns.RcodeNameError)
 
 	tests := []struct {
 		name   string
 		result QueryResult
-		want   bool
+		want   *bool
 	}{
-		{"AD flag set", QueryResult{Response: respAD}, true},
-		{"AD flag not set", QueryResult{Response: respNoAD}, false},
-		{"Nil response", QueryResult{Response: nil}, false},
-		{"Error response", QueryResult{Error: errors.New("fail")}, false},
-		{"Rcode error", QueryResult{Response: respErr}, false}, // AD flag irrelevant if Rcode != Success? Check logic. The code checks AD flag directly.
+		{"validation failure indicates dnssec support", QueryResult{Response: respValidated}, boolPtr(true)},
+		{"successful bogus response indicates no validation", QueryResult{Response: respNotValidated}, boolPtr(false)},
+		{"Nil response", QueryResult{Response: nil}, nil},
+		{"Error response", QueryResult{Error: errors.New("fail")}, nil},
+		{"Inconclusive response", QueryResult{Response: respInconclusive}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, checkADFlag(tt.result))
+			assert.Equal(t, tt.want, checkDNSSECValidation(tt.result))
 		})
 	}
+}
+
+func TestPrepareCheckJobs_UsesCurrentCheckDomains(t *testing.T) {
+	server := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	benchmarker := NewBenchmarker(&config.Config{
+		Servers:       []config.ServerInfo{server},
+		CheckDNSSEC:   true,
+		CheckNXDOMAIN: true,
+		RateLimit:     0,
+		Timeout:       time.Second,
+	})
+	defer benchmarker.Close()
+
+	jobs := benchmarker.prepareCheckJobs([]config.ServerInfo{server})
+	require.Len(t, jobs, 2)
+	assert.Equal(t, "dnssec-failed.org.", jobs[0].domain)
+	assert.Equal(t, "dnssec", jobs[0].checkType)
+	assert.True(t, strings.HasPrefix(jobs[1].domain, nxdomainCheckDomainPrefix))
+	assert.True(t, strings.HasSuffix(jobs[1].domain, ".invalid."))
+	assert.Equal(t, "nxdomain", jobs[1].checkType)
 }
 
 func TestCheckNXDOMAINHijack(t *testing.T) {
@@ -357,14 +379,14 @@ func TestCheckNXDOMAINHijack(t *testing.T) {
 	tests := []struct {
 		name   string
 		result QueryResult
-		want   bool // True if hijacked
+		want   *bool // True if hijacked
 	}{
-		{"Correct NXDOMAIN", QueryResult{Response: respNXDOMAIN}, false},
-		{"Hijacked (NOERROR + Answer)", QueryResult{Response: respHijacked}, true},
-		{"Server Failure", QueryResult{Response: respServFail}, false},
-		{"NOERROR, No Answer", QueryResult{Response: respNoErrorNoAnswer}, false}, // Not considered hijack by current logic
-		{"Nil response", QueryResult{Response: nil}, false},
-		{"Query Error", QueryResult{Error: errors.New("fail")}, false},
+		{"Correct NXDOMAIN", QueryResult{Response: respNXDOMAIN}, boolPtr(false)},
+		{"Hijacked (NOERROR + Answer)", QueryResult{Response: respHijacked}, boolPtr(true)},
+		{"Server Failure", QueryResult{Response: respServFail}, nil},
+		{"NOERROR, No Answer", QueryResult{Response: respNoErrorNoAnswer}, nil},
+		{"Nil response", QueryResult{Response: nil}, nil},
+		{"Query Error", QueryResult{Error: errors.New("fail")}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -387,14 +409,14 @@ func TestCheckRebindingProtection(t *testing.T) {
 	tests := []struct {
 		name   string
 		result QueryResult
-		want   bool // True if blocked
+		want   *bool // True if blocked
 	}{
-		{"Blocked (NXDOMAIN)", QueryResult{Response: respBlockedNX}, true},
-		{"Blocked (REFUSED)", QueryResult{Response: respBlockedRefused}, true},
-		{"Blocked (NOERROR, No Answer)", QueryResult{Response: respBlockedNoErrorNoAnswer}, true},
-		{"Allowed (NOERROR + Answer)", QueryResult{Response: respAllowed}, false},
-		{"Query Error", QueryResult{Error: errors.New("fail")}, true}, // Errors are treated as blocked
-		{"Nil Response", QueryResult{Response: nil}, true},            // Nil response treated as blocked
+		{"Blocked (NXDOMAIN)", QueryResult{Response: respBlockedNX}, boolPtr(true)},
+		{"Blocked (REFUSED)", QueryResult{Response: respBlockedRefused}, boolPtr(true)},
+		{"Blocked (NOERROR, No Answer)", QueryResult{Response: respBlockedNoErrorNoAnswer}, boolPtr(true)},
+		{"Allowed (NOERROR + Answer)", QueryResult{Response: respAllowed}, boolPtr(false)},
+		{"Query Error", QueryResult{Error: errors.New("fail")}, nil},
+		{"Nil Response", QueryResult{Response: nil}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -422,17 +444,17 @@ func TestCheckResponseAccuracy(t *testing.T) {
 		name       string
 		result     QueryResult
 		expectedIP string
-		want       bool // True if accurate
+		want       *bool // True if accurate
 	}{
-		{"Correct IP", QueryResult{Response: respCorrect}, expectedIP, true},
-		{"Wrong IP", QueryResult{Response: respWrong}, expectedIP, false},
-		{"Multiple, Correct First", QueryResult{Response: respMultipleCorrectFirst}, expectedIP, true},
-		{"Multiple, Correct Second", QueryResult{Response: respMultipleCorrectSecond}, expectedIP, true},
-		{"Multiple, All Wrong", QueryResult{Response: respMultipleWrong}, expectedIP, false},
-		{"NOERROR, No Answer", QueryResult{Response: respNoErrorNoAnswer}, expectedIP, false},
-		{"NXDOMAIN", QueryResult{Response: respNXDOMAIN}, expectedIP, false},
-		{"Query Error", QueryResult{Error: errors.New("fail")}, expectedIP, false},
-		{"Nil Response", QueryResult{Response: nil}, expectedIP, false},
+		{"Correct IP", QueryResult{Response: respCorrect}, expectedIP, boolPtr(true)},
+		{"Wrong IP", QueryResult{Response: respWrong}, expectedIP, boolPtr(false)},
+		{"Multiple, Correct First", QueryResult{Response: respMultipleCorrectFirst}, expectedIP, boolPtr(true)},
+		{"Multiple, Correct Second", QueryResult{Response: respMultipleCorrectSecond}, expectedIP, boolPtr(true)},
+		{"Multiple, All Wrong", QueryResult{Response: respMultipleWrong}, expectedIP, boolPtr(false)},
+		{"NOERROR, No Answer", QueryResult{Response: respNoErrorNoAnswer}, expectedIP, nil},
+		{"NXDOMAIN", QueryResult{Response: respNXDOMAIN}, expectedIP, nil},
+		{"Query Error", QueryResult{Error: errors.New("fail")}, expectedIP, nil},
+		{"Nil Response", QueryResult{Response: nil}, expectedIP, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -492,7 +514,9 @@ func mockAllProtocolFuncs(mockFunc func(serverInfo config.ServerInfo, domain str
 	performDoHQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
 		return mockFunc(serverInfo, domain, qType, timeout)
 	}
-	performDoQQueryFunc = mockFunc
+	performDoQQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
+		return mockFunc(serverInfo, domain, qType, timeout)
+	}
 
 	return func() {
 		performUDPQueryFunc = originalUDP
@@ -533,12 +557,12 @@ func TestBenchmarker_runLatencyBenchmark(t *testing.T) {
 	}
 	mockUncachedResults := map[string][]QueryResult{
 		server1Info.String(): {
-			{Latency: 20 * time.Millisecond, Response: &dns.Msg{}}, // Uncached 1 OK
-			{Error: errors.New("simulated error")},                 // Uncached 2 Error
+			{Latency: 20 * time.Millisecond, Response: nxdomainResponse()}, // Uncached 1 OK (NXDOMAIN expected for random domains)
+			{Error: errors.New("simulated error")},                         // Uncached 2 Error
 		},
 		server2Info.String(): {
-			{Latency: 50 * time.Millisecond, Response: &dns.Msg{}}, // Uncached 1 OK
-			{Latency: 55 * time.Millisecond, Response: &dns.Msg{}}, // Uncached 2 OK
+			{Latency: 50 * time.Millisecond, Response: nxdomainResponse()}, // Uncached 1 OK (NXDOMAIN expected)
+			{Latency: 55 * time.Millisecond, Response: nxdomainResponse()}, // Uncached 2 OK (NXDOMAIN expected)
 		},
 	}
 
@@ -620,10 +644,8 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	// Prepare mock DNS messages for different checks
 	reqDNSSEC := &dns.Msg{}
 	reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
-	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
-	respDNSSECOk.AuthenticatedData = true
+	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeServerFailure)
 	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
-	respDNSSECNo.AuthenticatedData = false
 
 	// We need unique NXDOMAINs per server if testing concurrently, but mock can handle it
 	reqNXDOMAIN := &dns.Msg{}
@@ -642,8 +664,8 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	respAccuracyWrong := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, "192.0.2.11"))
 
 	reqDotcom := &dns.Msg{}
-	reqDotcom.SetQuestion("some-dotcom.test.", dns.TypeA) // Domain doesn't matter for mock map key
-	respDotcomOk := createTestResponse(reqDotcom, dns.RcodeSuccess)
+	reqDotcom.SetQuestion("some-dotcom.test.", dns.TypeA)
+	respDotcomNX := createTestResponse(reqDotcom, dns.RcodeNameError)
 
 	// Define mock results - map key is server address, value is list of results IN THE ORDER CHECKS ARE ADDED
 	// Order: DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom
@@ -653,7 +675,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 			{Response: respNXDOMAINOk},                               // NXDOMAIN OK
 			{Response: respRebindingAllowed},                         // Rebinding Allowed
 			{Response: respAccuracyOk},                               // Accuracy OK
-			{Latency: 15 * time.Millisecond, Response: respDotcomOk}, // Dotcom OK
+			{Latency: 15 * time.Millisecond, Response: respDotcomNX}, // Dotcom OK (NXDOMAIN expected)
 		},
 		server2Info.String(): {
 			{Response: respDNSSECNo},             // DNSSEC No
@@ -788,27 +810,25 @@ func TestBenchmarker_Run(t *testing.T) {
 	reqDotcom.SetQuestion("unique-dotcom.", dns.TypeA)
 
 	respCachedOK := createTestResponse(reqCached, dns.RcodeSuccess)
-	respUncachedOK := createTestResponse(reqUncached, dns.RcodeSuccess)
-	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
-	respDNSSECOk.AuthenticatedData = true
+	respUncachedNX := createTestResponse(reqUncached, dns.RcodeNameError)
+	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeServerFailure)
 	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
-	respDNSSECNo.AuthenticatedData = false
 	respNXDOMAINOk := createTestResponse(reqNXDOMAIN, dns.RcodeNameError)
 	respNXDOMAINHijacked := createTestResponse(reqNXDOMAIN, dns.RcodeSuccess, createARecord("hijacked.test.", "1.2.3.4"))
 	respAccuracyOk := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, accuracyIP))
 	respAccuracyWrong := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, "192.0.2.21"))
-	respDotcomOk := createTestResponse(reqDotcom, dns.RcodeSuccess)
+	respDotcomNX := createTestResponse(reqDotcom, dns.RcodeNameError)
 
-	// Define mock results sequence for PerformQueryFunc
+	// Define mock results sequence per server
 	// Order per server: Cached Latency, Uncached Latency, DNSSEC Check, NXDOMAIN Check, Accuracy Check, Dotcom Check
 	mockResults := map[string][]QueryResult{
 		server1Info.String(): {
 			{Latency: 10 * time.Millisecond, Response: respCachedOK},   // Latency Cached
-			{Latency: 20 * time.Millisecond, Response: respUncachedOK}, // Latency Uncached
+			{Latency: 20 * time.Millisecond, Response: respUncachedNX}, // Latency Uncached (NXDOMAIN expected)
 			{Response: respDNSSECOk},                                   // Check DNSSEC
 			{Response: respNXDOMAINOk},                                 // Check NXDOMAIN
 			{Response: respAccuracyOk},                                 // Check Accuracy
-			{Latency: 15 * time.Millisecond, Response: respDotcomOk},   // Check Dotcom
+			{Latency: 15 * time.Millisecond, Response: respDotcomNX},   // Check Dotcom (NXDOMAIN expected)
 		},
 		server2Info.String(): {
 			{Latency: 15 * time.Millisecond, Response: respCachedOK}, // Latency Cached
@@ -888,11 +908,126 @@ func TestBenchmarker_Run(t *testing.T) {
 
 }
 
+// --- Regression tests: NXDOMAIN must count as success for latency/dotcom ---
+
+func TestProcessLatencyResult_NXDOMAINCountsAsSuccess(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second})
+	defer benchmarker.Close()
+	benchmarker.Results.Results[serverInfo.String()] = &analysis.ServerResult{
+		ServerAddress: serverInfo.String(),
+		TotalQueries:  3,
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("nxdomain-test-abc123.net.", dns.TypeA)
+
+	nxResp := createTestResponse(req, dns.RcodeNameError)
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 25 * time.Millisecond, Response: nxResp},
+		queryType:  analysis.Uncached,
+	})
+
+	sfResp := createTestResponse(req, dns.RcodeServerFailure)
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 30 * time.Millisecond, Response: sfResp},
+		queryType:  analysis.Cached,
+	})
+
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Error: errors.New("connection refused")},
+		queryType:  analysis.Uncached,
+	})
+
+	result := benchmarker.Results.Results[serverInfo.String()]
+	require.Len(t, result.UncachedLatencies, 1, "NXDOMAIN response should count as successful uncached latency")
+	assert.Equal(t, 25*time.Millisecond, result.UncachedLatencies[0])
+	require.Len(t, result.CachedLatencies, 1, "SERVFAIL response should count as successful cached latency")
+	assert.Equal(t, 30*time.Millisecond, result.CachedLatencies[0])
+	assert.Equal(t, 1, result.Errors, "Only transport errors should be counted")
+	assert.Equal(t, 1, result.TransportErrors)
+	assert.Equal(t, 0, result.TimeoutErrors)
+	assert.Equal(t, 1, result.DNSFailures, "cached SERVFAIL should be tracked separately from transport failures")
+	assert.Equal(t, 0, result.MalformedResponses)
+}
+
+func TestProcessLatencyResult_CachedDNSFailuresAreTracked(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second})
+	defer benchmarker.Close()
+	benchmarker.Results.Results[serverInfo.String()] = &analysis.ServerResult{
+		ServerAddress: serverInfo.String(),
+		TotalQueries:  3,
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("cached.example.com.", dns.TypeA)
+
+	servfailResp := createTestResponse(req, dns.RcodeServerFailure)
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 20 * time.Millisecond, Response: servfailResp},
+		queryType:  analysis.Cached,
+	})
+
+	refusedResp := createTestResponse(req, dns.RcodeRefused)
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 22 * time.Millisecond, Response: refusedResp},
+		queryType:  analysis.Cached,
+	})
+
+	nxResp := createTestResponse(req, dns.RcodeNameError)
+	benchmarker.processLatencyResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 25 * time.Millisecond, Response: nxResp},
+		queryType:  analysis.Uncached,
+	})
+
+	result := benchmarker.Results.Results[serverInfo.String()]
+	require.Len(t, result.CachedLatencies, 2, "cached DNS failures should still preserve latency measurements")
+	assert.Equal(t, []time.Duration{20 * time.Millisecond, 22 * time.Millisecond}, result.CachedLatencies)
+	require.Len(t, result.UncachedLatencies, 1, "uncached NXDOMAIN should still count as success")
+	assert.Equal(t, 25*time.Millisecond, result.UncachedLatencies[0])
+	assert.Equal(t, 0, result.Errors, "DNS failures should not be counted as transport errors")
+	assert.Equal(t, 0, result.TransportErrors)
+	assert.Equal(t, 0, result.TimeoutErrors)
+	assert.Equal(t, 2, result.DNSFailures, "cached SERVFAIL and REFUSED should be tracked separately")
+	assert.Equal(t, 0, result.MalformedResponses)
+}
+
+func TestProcessCheckResult_DotcomNXDOMAIN(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second, CheckDotcom: true})
+	defer benchmarker.Close()
+	benchmarker.Results.Results[serverInfo.String()] = &analysis.ServerResult{
+		ServerAddress: serverInfo.String(),
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("dnsbench-dotcom-abc123.com.", dns.TypeA)
+	nxResp := createTestResponse(req, dns.RcodeNameError)
+
+	benchmarker.processCheckResult(queryJobResult{
+		serverInfo: serverInfo,
+		result:     QueryResult{Latency: 18 * time.Millisecond, Response: nxResp},
+		checkType:  "dotcom",
+	})
+
+	result := benchmarker.Results.Results[serverInfo.String()]
+	require.NotNil(t, result.DotcomLatency, "Dotcom latency should be recorded for NXDOMAIN responses")
+	assert.Equal(t, 18*time.Millisecond, *result.DotcomLatency)
+}
+
 // --- Testing PerformQuery Dispatcher ---
 
 // Mock function signature
 type mockQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult
 type mockDoHQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult
+type mockDoQQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult
 
 // Helper to create a mock function that records it was called
 func createMockQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockQueryFunc {
@@ -911,7 +1046,14 @@ func createMockDoHQueryFunc(protocolCalled *config.ProtocolType, expectedProtoco
 	}
 }
 
-func TestPerformQuery_Dispatcher(t *testing.T) {
+func createMockDoQQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockDoQQueryFunc {
+	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
+		*protocolCalled = expectedProtocol
+		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
+	}
+}
+
+func TestBenchmarker_performQuery_Dispatcher(t *testing.T) {
 	domain := "dispatch.test."
 	qType := dns.TypeA
 	timeout := 1 * time.Second
@@ -945,7 +1087,7 @@ func TestPerformQuery_Dispatcher(t *testing.T) {
 			performTCPQueryFunc = createMockQueryFunc(&calledProtocol, config.TCP)
 			performDoTQueryFunc = createMockQueryFunc(&calledProtocol, config.DOT)
 			performDoHQueryFunc = createMockDoHQueryFunc(&calledProtocol, config.DOH)
-			performDoQQueryFunc = createMockQueryFunc(&calledProtocol, config.DOQ)
+			performDoQQueryFunc = createMockDoQQueryFunc(&calledProtocol, config.DOQ)
 
 			// Restore original functions after test using defer
 			defer func() {
@@ -956,7 +1098,10 @@ func TestPerformQuery_Dispatcher(t *testing.T) {
 				performDoQQueryFunc = originalDoQ
 			}()
 
-			result := PerformQueryFunc(tt.serverInfo, domain, qType, timeout) // Use the variable
+			benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: timeout})
+			defer benchmarker.Close()
+
+			result := benchmarker.performQuery(tt.serverInfo, domain, qType, timeout)
 
 			if tt.expectedProtocol == config.ProtocolType("invalid") {
 				require.Error(t, result.Error)
@@ -1050,8 +1195,8 @@ func TestQuicConnectionPool(t *testing.T) {
 }
 
 func TestQuicPoolCleanup(t *testing.T) {
-	// Test the exported cleanup function exists and doesn't panic
+	benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second})
 	assert.NotPanics(t, func() {
-		CleanupQuicPool()
+		benchmarker.Close()
 	})
 }

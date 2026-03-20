@@ -185,7 +185,7 @@ func buildCSVHeader(cfg *config.Config) []string {
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
 		"Reliability(%)",
 		"SuccessfulCachedQueries", "SuccessfulUncachedQueries",
-		"Errors", "TotalLatencyQueries",
+		"FailedLatencyQueries", "TimeoutErrors", "TransportErrors", "DNSFailures", "MalformedResponses", "TotalLatencyQueries",
 	}
 	if cfg.CheckDotcom {
 		header = append(header, "DotcomLatency(ms)")
@@ -218,6 +218,10 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		strconv.Itoa(len(res.CachedLatencies)),
 		strconv.Itoa(len(res.UncachedLatencies)),
 		strconv.Itoa(res.Errors),
+		strconv.Itoa(res.TimeoutErrors),
+		strconv.Itoa(res.TransportErrors),
+		strconv.Itoa(res.DNSFailures),
+		strconv.Itoa(res.MalformedResponses),
 		strconv.Itoa(res.TotalQueries),
 	}
 	if cfg.CheckDotcom {
@@ -250,7 +254,12 @@ type JSONServerResult struct {
 	ReliabilityPct            float64  `json:"reliabilityPct"`
 	SuccessfulCachedQueries   int      `json:"successfulCachedQueries"`
 	SuccessfulUncachedQueries int      `json:"successfulUncachedQueries"`
-	Errors                    int      `json:"errors"`
+	FailedLatencyQueries      int      `json:"failedLatencyQueries"`
+	Errors                    int      `json:"errors"` // Deprecated alias for compatibility
+	TimeoutErrors             int      `json:"timeoutErrors"`
+	TransportErrors           int      `json:"transportErrors"`
+	DNSFailures               int      `json:"dnsFailures"`
+	MalformedResponses        int      `json:"malformedResponses"`
 	TotalLatencyQueries       int      `json:"totalLatencyQueries"`
 	SupportsDNSSEC            *bool    `json:"supportsDnssec,omitempty"`
 	HijacksNXDOMAIN           *bool    `json:"hijacksNxdomain,omitempty"`
@@ -266,7 +275,12 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		ReliabilityPct:            res.Reliability,
 		SuccessfulCachedQueries:   len(res.CachedLatencies),
 		SuccessfulUncachedQueries: len(res.UncachedLatencies),
+		FailedLatencyQueries:      res.Errors,
 		Errors:                    res.Errors,
+		TimeoutErrors:             res.TimeoutErrors,
+		TransportErrors:           res.TransportErrors,
+		DNSFailures:               res.DNSFailures,
+		MalformedResponses:        res.MalformedResponses,
 		TotalLatencyQueries:       res.TotalQueries,
 		SupportsDNSSEC:            res.SupportsDNSSEC,
 		HijacksNXDOMAIN:           res.HijacksNXDOMAIN,
@@ -308,7 +322,7 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	// Report best server results
 	if bestServer != nil {
-		_, _ = fmt.Fprintf(writer, "Fastest reliable server (based on uncached latency & accuracy): %s\n", bestServer.ServerAddress)
+		_, _ = fmt.Fprintf(writer, "Fastest recommended server (based on uncached latency, high response reliability, and no latency-probe DNS failures): %s\n", bestServer.ServerAddress)
 		_, _ = fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgUncachedLatency, len(bestServer.UncachedLatencies) > 0),
 			formatStdDev(bestServer.StdDevUncachedLatency, len(bestServer.UncachedLatencies) > 1))
@@ -341,13 +355,16 @@ func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analy
 		if res.Reliability < reliabilityThreshold {
 			continue // Skip unreliable
 		}
+		if res.DNSFailures > 0 {
+			continue // Skip resolvers that returned unexpected DNS rcodes during latency probes
+		}
 
-		isAccurate := true // Assume accurate if check disabled or passed
-		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
-			isAccurate = false
+		isAccurate := true
+		if cfg.AccuracyCheckFile != "" {
+			isAccurate = res.IsAccurate != nil && *res.IsAccurate
 		}
 		if !isAccurate {
-			continue // Skip inaccurate
+			continue // Skip inaccurate or inconclusive accuracy results when accuracy is enabled
 		}
 
 		// --- Comparison Logic ---
@@ -428,6 +445,10 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 			_, _ = fmt.Fprintf(writer, "%s Low reliability (%.1f%%).\n", warningPrefix, res.Reliability)
 			serverIssues = true
 		}
+		if res.DNSFailures > 0 {
+			_, _ = fmt.Fprintf(writer, "%s Returned %d unexpected DNS failure responses during latency probes.\n", warningPrefix, res.DNSFailures)
+			serverIssues = true
+		}
 		if cfg.CheckNXDOMAIN && res.HijacksNXDOMAIN != nil && *res.HijacksNXDOMAIN {
 			_, _ = fmt.Fprintf(writer, "%s Appears to hijack NXDOMAIN responses.\n", warningPrefix)
 			serverIssues = true
@@ -438,6 +459,10 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 		}
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
 			_, _ = fmt.Fprintf(writer, "%s Returned inaccurate results for %s.\n", warningPrefix, cfg.AccuracyCheckDomain)
+			serverIssues = true
+		}
+		if cfg.AccuracyCheckFile != "" && res.IsAccurate == nil {
+			_, _ = fmt.Fprintf(writer, "%s Accuracy check for %s was inconclusive.\n", warningPrefix, cfg.AccuracyCheckDomain)
 			serverIssues = true
 		}
 		if serverIssues {

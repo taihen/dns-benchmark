@@ -23,11 +23,15 @@ func (qt QueryType) String() string {
 
 // Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
-	ServerAddress     string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
-	CachedLatencies   []time.Duration
-	UncachedLatencies []time.Duration
-	Errors            int // Count of errors during latency queries
-	TotalQueries      int // Total number of latency queries attempted
+	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	CachedLatencies    []time.Duration
+	UncachedLatencies  []time.Duration
+	Errors             int // Latency probes that failed before a structurally valid DNS response was received
+	TotalQueries       int // Total number of latency queries attempted
+	TimeoutErrors      int
+	TransportErrors    int
+	DNSFailures        int
+	MalformedResponses int
 
 	// Check Results (pointers allow nil state for unchecked/error)
 	SupportsDNSSEC  *bool
@@ -59,16 +63,14 @@ func NewBenchmarkResults() *BenchmarkResults {
 
 // CalculateMetrics computes derived metrics for a ServerResult.
 func (sr *ServerResult) CalculateMetrics() {
-	// Calculate overall Reliability based on latency queries
+	// Calculate overall Reliability based on latency queries.
+	// sr.Errors is already accumulated by processLatencyResult; don't overwrite it.
 	totalLatencyQueriesAttempted := sr.TotalQueries
 	successfulLatencyQueries := len(sr.CachedLatencies) + len(sr.UncachedLatencies)
-	failedLatencyQueries := totalLatencyQueriesAttempted - successfulLatencyQueries
 	if totalLatencyQueriesAttempted > 0 {
 		sr.Reliability = (float64(successfulLatencyQueries) / float64(totalLatencyQueriesAttempted)) * 100.0
-		sr.Errors = failedLatencyQueries // Store latency-specific errors
 	} else {
 		sr.Reliability = 0.0
-		sr.Errors = 0
 	}
 
 	// Calculate Cached Latency Metrics

@@ -327,7 +327,7 @@ func TestWriteCSVResults(t *testing.T) {
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
 		"Reliability(%)",
 		"SuccessfulCachedQueries", "SuccessfulUncachedQueries",
-		"Errors", "TotalLatencyQueries",
+		"FailedLatencyQueries", "TimeoutErrors", "TransportErrors", "DNSFailures", "MalformedResponses", "TotalLatencyQueries",
 		"DotcomLatency(ms)",
 		"SupportsDNSSEC", "HijacksNXDOMAIN", "BlocksRebinding", "IsAccurate",
 	}
@@ -344,12 +344,16 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "2", records[1][6])       // Success Cached
 	assert.Equal(t, "3", records[1][7])       // Success Uncached
 	assert.Equal(t, "0", records[1][8])       // Errors
-	assert.Equal(t, "5", records[1][9])       // Total Queries
-	assert.Equal(t, "15.000", records[1][10]) // Dotcom
-	assert.Equal(t, "true", records[1][11])   // DNSSEC
-	assert.Equal(t, "false", records[1][12])  // NXDOMAIN
-	assert.Equal(t, "true", records[1][13])   // Rebinding
-	assert.Equal(t, "true", records[1][14])   // Accuracy
+	assert.Equal(t, "0", records[1][9])       // Timeout Errors
+	assert.Equal(t, "0", records[1][10])      // Transport Errors
+	assert.Equal(t, "0", records[1][11])      // DNS Failures
+	assert.Equal(t, "0", records[1][12])      // Malformed Responses
+	assert.Equal(t, "5", records[1][13])      // Total Queries
+	assert.Equal(t, "15.000", records[1][14]) // Dotcom
+	assert.Equal(t, "true", records[1][15])   // DNSSEC
+	assert.Equal(t, "false", records[1][16])  // NXDOMAIN
+	assert.Equal(t, "true", records[1][17])   // Rebinding
+	assert.Equal(t, "true", records[1][18])   // Accuracy
 
 	// Row 2: 8.8.8.8
 	assert.Equal(t, "8.8.8.8:53", records[2][0])
@@ -361,12 +365,16 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "1", records[2][6])      // Success Cached
 	assert.Equal(t, "1", records[2][7])      // Success Uncached
 	assert.Equal(t, "1", records[2][8])      // Errors
-	assert.Equal(t, "3", records[2][9])      // Total Queries
-	assert.Equal(t, "N/A", records[2][10])   // Dotcom
-	assert.Equal(t, "true", records[2][11])  // DNSSEC
-	assert.Equal(t, "N/A", records[2][12])   // NXDOMAIN
-	assert.Equal(t, "false", records[2][13]) // Rebinding
-	assert.Equal(t, "false", records[2][14]) // Accuracy
+	assert.Equal(t, "0", records[2][9])      // Timeout Errors
+	assert.Equal(t, "0", records[2][10])     // Transport Errors
+	assert.Equal(t, "0", records[2][11])     // DNS Failures
+	assert.Equal(t, "0", records[2][12])     // Malformed Responses
+	assert.Equal(t, "3", records[2][13])     // Total Queries
+	assert.Equal(t, "N/A", records[2][14])   // Dotcom
+	assert.Equal(t, "true", records[2][15])  // DNSSEC
+	assert.Equal(t, "N/A", records[2][16])   // NXDOMAIN
+	assert.Equal(t, "false", records[2][17]) // Rebinding
+	assert.Equal(t, "false", records[2][18]) // Accuracy
 
 	// Row 3: 9.9.9.9
 	assert.Equal(t, "tls://9.9.9.9:853", records[3][0])
@@ -378,12 +386,16 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "0", records[3][6])    // Success Cached
 	assert.Equal(t, "0", records[3][7])    // Success Uncached
 	assert.Equal(t, "4", records[3][8])    // Errors
-	assert.Equal(t, "4", records[3][9])    // Total Queries
-	assert.Equal(t, "N/A", records[3][10]) // Dotcom
-	assert.Equal(t, "N/A", records[3][11]) // DNSSEC
-	assert.Equal(t, "N/A", records[3][12]) // NXDOMAIN
-	assert.Equal(t, "N/A", records[3][13]) // Rebinding
-	assert.Equal(t, "N/A", records[3][14]) // Accuracy
+	assert.Equal(t, "0", records[3][9])    // Timeout Errors
+	assert.Equal(t, "0", records[3][10])   // Transport Errors
+	assert.Equal(t, "0", records[3][11])   // DNS Failures
+	assert.Equal(t, "0", records[3][12])   // Malformed Responses
+	assert.Equal(t, "4", records[3][13])   // Total Queries
+	assert.Equal(t, "N/A", records[3][14]) // Dotcom
+	assert.Equal(t, "N/A", records[3][15]) // DNSSEC
+	assert.Equal(t, "N/A", records[3][16]) // NXDOMAIN
+	assert.Equal(t, "N/A", records[3][17]) // Rebinding
+	assert.Equal(t, "N/A", records[3][18]) // Accuracy
 }
 
 func TestWriteJSONResults(t *testing.T) {
@@ -424,6 +436,7 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.InDelta(t, 100.0, res1.ReliabilityPct, 0.01)
 	assert.Equal(t, 2, res1.SuccessfulCachedQueries)
 	assert.Equal(t, 3, res1.SuccessfulUncachedQueries)
+	assert.Equal(t, 0, res1.FailedLatencyQueries)
 	assert.Equal(t, 0, res1.Errors)
 	assert.Equal(t, 5, res1.TotalLatencyQueries)
 	assert.NotNil(t, res1.DotcomLatencyMs)
@@ -448,6 +461,7 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.InDelta(t, 66.7, res2.ReliabilityPct, 0.1)
 	assert.Equal(t, 1, res2.SuccessfulCachedQueries)
 	assert.Equal(t, 1, res2.SuccessfulUncachedQueries)
+	assert.Equal(t, 1, res2.FailedLatencyQueries)
 	assert.Equal(t, 1, res2.Errors)
 	assert.Equal(t, 3, res2.TotalLatencyQueries)
 	assert.Nil(t, res2.DotcomLatencyMs)
@@ -468,6 +482,7 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.InDelta(t, 0.0, res3.ReliabilityPct, 0.01)
 	assert.Equal(t, 0, res3.SuccessfulCachedQueries)
 	assert.Equal(t, 0, res3.SuccessfulUncachedQueries)
+	assert.Equal(t, 4, res3.FailedLatencyQueries)
 	assert.Equal(t, 4, res3.Errors)
 	assert.Equal(t, 4, res3.TotalLatencyQueries)
 	assert.Nil(t, res3.DotcomLatencyMs)
@@ -536,6 +551,47 @@ func TestFindBestServer(t *testing.T) {
 					AvgUncachedLatency: 10 * time.Millisecond,
 					Reliability:        100.0,
 					IsAccurate:         &bFalse,
+				},
+				{
+					ServerAddress:      "accurate.server:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+					IsAccurate:         &bTrue,
+				},
+			},
+			cfg:            &config.Config{AccuracyCheckFile: "enabled"},
+			wantServerAddr: "accurate.server:53",
+		},
+		{
+			name: "skip server with dns failures",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "dns-failing.server:53",
+					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+					AvgUncachedLatency: 10 * time.Millisecond,
+					Reliability:        100.0,
+					DNSFailures:        3,
+				},
+				{
+					ServerAddress:      "clean.server:53",
+					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
+					AvgUncachedLatency: 20 * time.Millisecond,
+					Reliability:        100.0,
+				},
+			},
+			cfg:            &config.Config{},
+			wantServerAddr: "clean.server:53",
+		},
+		{
+			name: "skip inconclusive accuracy when accuracy check enabled",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress:      "inconclusive.server:53",
+					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
+					AvgUncachedLatency: 10 * time.Millisecond,
+					Reliability:        100.0,
+					IsAccurate:         nil,
 				},
 				{
 					ServerAddress:      "accurate.server:53",
@@ -804,7 +860,7 @@ func TestPrintSummary(t *testing.T) {
 			cfg: &config.Config{CheckDotcom: true},
 			wantContains: []string{
 				"--- Conclusion ---",
-				"Fastest reliable server",
+				"Fastest recommended server",
 				"1.1.1.1:53",
 				"Avg Uncached Latency",
 				"Avg Cached Latency",
@@ -919,6 +975,21 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
+			name: "warning for dns failures",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "dnsfail:53",
+					Reliability:   100.0,
+					DNSFailures:   2,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{},
+			wantContains: []string{
+				"Warning (dnsfail:53): Returned 2 unexpected DNS failure responses during latency probes.",
+			},
+		},
+		{
 			name: "warning for inaccurate results",
 			results: []*analysis.ServerResult{
 				{
@@ -931,6 +1002,21 @@ func TestPrintServerWarnings(t *testing.T) {
 			cfg:        &config.Config{AccuracyCheckFile: "enabled", AccuracyCheckDomain: "test.local."},
 			wantContains: []string{
 				"Warning (inaccurate:53): Returned inaccurate results for test.local.",
+			},
+		},
+		{
+			name: "warning for inconclusive accuracy",
+			results: []*analysis.ServerResult{
+				{
+					ServerAddress: "unknown-accuracy:53",
+					Reliability:   100.0,
+					IsAccurate:    nil,
+				},
+			},
+			bestServer: nil,
+			cfg:        &config.Config{AccuracyCheckFile: "enabled", AccuracyCheckDomain: "test.local."},
+			wantContains: []string{
+				"Warning (unknown-accuracy:53): Accuracy check for test.local. was inconclusive.",
 			},
 		},
 		{

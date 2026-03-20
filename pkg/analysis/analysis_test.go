@@ -114,7 +114,7 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 				TotalQueries:      4,
 				CachedLatencies:   []time.Duration{50 * time.Millisecond},
 				UncachedLatencies: []time.Duration{150 * time.Millisecond, 250 * time.Millisecond},
-				// Implicitly 1 error
+				Errors:            1, // Pre-set by processLatencyResult at runtime
 			},
 			expectedAvgCached:      50 * time.Millisecond,
 			expectedStdDevCached:   0, // n=1
@@ -129,6 +129,7 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 				TotalQueries:      5,
 				CachedLatencies:   []time.Duration{},
 				UncachedLatencies: []time.Duration{},
+				Errors:            5, // Pre-set by processLatencyResult at runtime
 			},
 			expectedAvgCached:      0,
 			expectedStdDevCached:   0,

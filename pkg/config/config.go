@@ -135,11 +135,11 @@ func LoadConfig() *Config {
 	flag.IntVar(&cfg.Concurrency, "c", 5, "Max concurrent queries/checks")
 	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
 	flag.StringVar(&cfg.QueryType, "type", "A", "DNS record type for latency queries")
-	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for cached latency test")
+	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for repeated-domain latency test (often cached, not guaranteed)")
 	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", false, "Check for DNSSEC support")
 	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
 	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
-	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Perform '.com' TLD lookup time check")
+	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Measure latency for a random .com NXDOMAIN lookup")
 	flag.StringVar(
 		&cfg.AccuracyCheckFile,
 		"accuracy-file",
