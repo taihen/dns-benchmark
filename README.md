@@ -48,7 +48,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false).
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
 - **Configuration:**
-  - Use built-in list of common public resolvers (Cloudflare, Google, Quad9, Adguard).
+  - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).

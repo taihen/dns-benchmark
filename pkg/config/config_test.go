@@ -572,6 +572,20 @@ func TestDefaultDNSStringsDoesNotIncludeDNS0EU(t *testing.T) {
 	}
 }
 
+func TestDefaultDNSStringsIncludesDNS4EUUnfiltered(t *testing.T) {
+	required := []string{
+		"86.54.11.100",
+		"tls://unfiltered.joindns4.eu",
+		"https://unfiltered.joindns4.eu/dns-query",
+	}
+
+	for _, entry := range required {
+		if !slices.Contains(DefaultDNSStrings, entry) {
+			t.Fatalf("DefaultDNSStrings is missing expected entry %q", entry)
+		}
+	}
+}
+
 // Helper to sort ServerInfo slices for comparison.
 func sortServerInfos(infos []ServerInfo) {
 	sort.Slice(infos, func(i, j int) bool {

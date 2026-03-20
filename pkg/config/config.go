@@ -114,6 +114,10 @@ var DefaultDNSStrings = []string{
 	"94.140.14.14",
 	"tls://dns.adguard-dns.com",
 	"https://dns.adguard-dns.com/dns-query",
+	// DNS4EU (Unfiltered)
+	"86.54.11.100",
+	"tls://unfiltered.joindns4.eu",
+	"https://unfiltered.joindns4.eu/dns-query",
 }
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
