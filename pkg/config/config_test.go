@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -554,6 +555,34 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 				t.Errorf("parseAndDeduplicateServers() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultDNSStringsDoesNotIncludeDNS0EU(t *testing.T) {
+	disallowed := []string{
+		"193.110.81.0",
+		"185.253.5.0",
+		"tls://dns0.eu",
+	}
+
+	for _, entry := range disallowed {
+		if slices.Contains(DefaultDNSStrings, entry) {
+			t.Fatalf("DefaultDNSStrings contains deprecated entry %q", entry)
+		}
+	}
+}
+
+func TestDefaultDNSStringsIncludesDNS4EUUnfiltered(t *testing.T) {
+	required := []string{
+		"86.54.11.100",
+		"tls://unfiltered.joindns4.eu",
+		"https://unfiltered.joindns4.eu/dns-query",
+	}
+
+	for _, entry := range required {
+		if !slices.Contains(DefaultDNSStrings, entry) {
+			t.Fatalf("DefaultDNSStrings is missing expected entry %q", entry)
+		}
 	}
 }
 

@@ -108,16 +108,16 @@ var DefaultDNSStrings = []string{
 	"https://dns.quad9.net/dns-query",
 	// OpenDNS
 	"208.67.222.222",
-	"tls://dns.opendns.com", // Uses hostname
+	"tls://dns.opendns.com",
 	"https://doh.opendns.com/dns-query",
-	// AdGuard DNS (Default)
+	// AdGuard DNS
 	"94.140.14.14",
 	"tls://dns.adguard-dns.com",
 	"https://dns.adguard-dns.com/dns-query",
-	// DNS0.eu
-	"193.110.81.0",
-	"185.253.5.0",
-	"tls://dns0.eu",
+	// DNS4EU (Unfiltered)
+	"86.54.11.100",
+	"tls://unfiltered.joindns4.eu",
+	"https://unfiltered.joindns4.eu/dns-query",
 }
 
 // LoadConfig parses flags, reads files, and returns the final configuration.

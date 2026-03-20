@@ -40,21 +40,21 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 - **Metrics Measured:**
   - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
   - **Uncached Latency:** Average and Standard Deviation for resolving unique, likely uncached domains.
-  - **Reliability:** Percentage of successful latency queries.
-  - **.com Latency:** Latency for resolving a unique `.com` domain (`-dotcom` flag).
+  - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
+  - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
   - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false).
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
 - **Configuration:**
-  - Use built-in list of common public resolvers (Cloudflare, Google, Quad9, Adguard).
+  - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table with results sorted by uncached latency.
-  - Console summary recommending the fastest reliable server and highlighting potential issues.
+  - Console summary recommending the fastest server with high response reliability, no latency-probe DNS failures, and confirmed accuracy when the accuracy check is enabled.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
