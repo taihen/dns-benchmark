@@ -50,7 +50,15 @@ jobs:
           cd ..
 
       - name: Semantic Release
+        id: semantic-release
         uses: cycjimmy/semantic-release-action@v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Configuration is now handled by .releaserc.json
+
+      - name: Update Homebrew tap
+        if: ${{ steps.semantic-release.outputs.new_release_published == 'true' }}
+        env:
+          TAG_NAME: ${{ steps.semantic-release.outputs.new_release_git_tag }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP }}
+        run: bash ./scripts/update-homebrew-formula.sh

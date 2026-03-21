@@ -10,10 +10,14 @@
 
 ```bash
 # Add Homebrew tap
-brew tap taihen/dns-benchmark
+brew tap taihen/tap
+
+# Install dns-benchmark
+brew install taihen/tap/dns-benchmark
 
 # Update to latest version
-brew install taihen/tap/dns-benchmark
+brew update
+brew upgrade taihen/tap/dns-benchmark
 ```
 
 ### Manual Installation
