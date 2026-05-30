@@ -178,6 +178,94 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 	}
 }
 
+func TestComputeScore(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+
+	tests := []struct {
+		name string
+		sr   ServerResult
+		want float64 // milliseconds; math.Inf(1) for unrankable
+	}{
+		{
+			name: "cached and uncached, full reliability, no dotcom (renormalized)",
+			// base = (0.50*10 + 0.25*10) / 0.75 = 10; effRel = 1 -> 10
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10), ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10), ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       4,
+			},
+			want: 10.0,
+		},
+		{
+			name: "all three metrics present, full reliability",
+			// base = (0.50*10 + 0.25*10 + 0.25*10) / 1.0 = 10
+			sr: func() ServerResult {
+				d := ms(10)
+				return ServerResult{
+					CachedLatencies:    []time.Duration{ms(10)},
+					UncachedLatencies:  []time.Duration{ms(10)},
+					AvgCachedLatency:   ms(10),
+					AvgUncachedLatency: ms(10),
+					DotcomLatency:      &d,
+					TotalQueries:       2,
+				}
+			}(),
+			want: 10.0,
+		},
+		{
+			name: "reliability and dns-failure penalty",
+			// 40 successful latency samples (20 cached + 20 uncached) of 50 total
+			// queries -> 10 implicit non-latency failures (timeouts/transport).
+			// Of the 40 successes, 5 returned a wrong rcode (DNSFailures), so
+			// usable = 40 - 5 = 35, effRel = 35/50 = 0.7.
+			// base = (0.50*10 + 0.25*10)/0.75 = 10 -> 10 / 0.7 = 14.285714...
+			sr: ServerResult{
+				CachedLatencies:    make([]time.Duration, 20),
+				UncachedLatencies:  make([]time.Duration, 20),
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				DNSFailures:        5,
+				TotalQueries:       50,
+			},
+			want: 10.0 / 0.7,
+		},
+		{
+			name: "no latency samples is unrankable",
+			sr:   ServerResult{TotalQueries: 10},
+			want: math.Inf(1),
+		},
+		{
+			name: "zero effective reliability is unrankable",
+			// all 10 successful samples are dns failures -> usable 0
+			sr: ServerResult{
+				UncachedLatencies:  make([]time.Duration, 10),
+				AvgUncachedLatency: ms(10),
+				DNSFailures:        10,
+				TotalQueries:       10,
+			},
+			want: math.Inf(1),
+		},
+	}
+
+	const tol = 1e-9
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeScore(&tt.sr)
+			if math.IsInf(tt.want, 1) {
+				if !math.IsInf(got, 1) {
+					t.Errorf("computeScore() = %v, want +Inf", got)
+				}
+				return
+			}
+			if math.Abs(got-tt.want) > tol {
+				t.Errorf("computeScore() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestQueryTypeString(t *testing.T) {
 	tests := []struct {
 		input QueryType

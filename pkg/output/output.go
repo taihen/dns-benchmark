@@ -93,42 +93,23 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 	return slice
 }
 
-// sortServerResults sorts the ServerResult slice based on performance metrics.
-// It prioritizes sorting by uncached latency, then cached latency, to rank servers by speed.
+// sortServerResults sorts results by composite Score ascending (lower is
+// better). Unrankable servers (+Inf) sort last; ties break by ServerAddress for
+// deterministic output.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
-		resI := results[i]
-		resJ := results[j]
-		hasUncachedI := len(resI.UncachedLatencies) > 0
-		hasUncachedJ := len(resJ.UncachedLatencies) > 0
-		if hasUncachedI && !hasUncachedJ {
-			return true // i has uncached, j doesn't, i is "better"
+		si, sj := results[i].Score, results[j].Score
+		if si != sj {
+			return si < sj
 		}
-		if !hasUncachedI && hasUncachedJ {
-			return false // j has uncached, i doesn't, j is "better"
-		}
-		if hasUncachedI && hasUncachedJ && resI.AvgUncachedLatency != resJ.AvgUncachedLatency {
-			return resI.AvgUncachedLatency < resJ.AvgUncachedLatency // Compare uncached latency if both have it
-		}
-		hasCachedI := len(resI.CachedLatencies) > 0
-		hasCachedJ := len(resJ.CachedLatencies) > 0
-		if hasCachedI && !hasCachedJ {
-			return true // i has cached, j doesn't, i is "better"
-		}
-		if !hasCachedI && hasCachedJ {
-			return false // j has cached, i doesn't, j is "better"
-		}
-		if hasCachedI && hasCachedJ && resI.AvgCachedLatency != resJ.AvgCachedLatency {
-			return resI.AvgCachedLatency < resJ.AvgCachedLatency // Compare cached latency if both have it
-		}
-		return false // No significant difference for sorting
+		return results[i].ServerAddress < results[j].ServerAddress
 	})
 }
 
 // buildHeader constructs the header row for console output.
 // It includes columns for server address, latency metrics, reliability, and optional checks.
 func buildHeader(cfg *config.Config) []string {
-	header := []string{"DNS Server", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Reliability"}
+	header := []string{"DNS Server", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Score", "Reliability"}
 	if cfg.CheckDotcom {
 		header = append(header, ".com Latency")
 	}
@@ -156,6 +137,7 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatStdDev(res.StdDevCachedLatency, len(res.CachedLatencies) > 1),
 		formatLatency(res.AvgUncachedLatency, len(res.UncachedLatencies) > 0),
 		formatStdDev(res.StdDevUncachedLatency, len(res.UncachedLatencies) > 1),
+		formatScore(res.Score),
 		fmt.Sprintf("%.1f%%", res.Reliability),
 	}
 	if cfg.CheckDotcom {
@@ -183,6 +165,7 @@ func buildCSVHeader(cfg *config.Config) []string {
 		"ServerAddress",
 		"AvgCachedLatency(ms)", "StdDevCachedLatency(ms)",
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
+		"Score(ms)",
 		"Reliability(%)",
 		"SuccessfulCachedQueries", "SuccessfulUncachedQueries",
 		"FailedLatencyQueries", "TimeoutErrors", "TransportErrors", "DNSFailures", "MalformedResponses", "TotalLatencyQueries",
@@ -214,6 +197,7 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatMillisFloat(res.StdDevCachedLatency, len(res.CachedLatencies) > 1),
 		formatMillisFloat(res.AvgUncachedLatency, len(res.UncachedLatencies) > 0),
 		formatMillisFloat(res.StdDevUncachedLatency, len(res.UncachedLatencies) > 1),
+		formatScoreCSV(res.Score),
 		fmt.Sprintf("%.1f", res.Reliability),
 		strconv.Itoa(len(res.CachedLatencies)),
 		strconv.Itoa(len(res.UncachedLatencies)),
@@ -252,6 +236,7 @@ type JSONServerResult struct {
 	StdDevUncachedLatencyMs   *float64 `json:"stdDevUncachedLatencyMs,omitempty"`
 	DotcomLatencyMs           *float64 `json:"dotcomLatencyMs,omitempty"`
 	ReliabilityPct            float64  `json:"reliabilityPct"`
+	Score                     *float64 `json:"score"`
 	SuccessfulCachedQueries   int      `json:"successfulCachedQueries"`
 	SuccessfulUncachedQueries int      `json:"successfulUncachedQueries"`
 	FailedLatencyQueries      int      `json:"failedLatencyQueries"`
@@ -307,6 +292,10 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		dotcomMs := float64(res.DotcomLatency.Microseconds()) / 1000.0
 		jsonRes.DotcomLatencyMs = &dotcomMs
 	}
+	if !math.IsInf(res.Score, 1) {
+		score := res.Score
+		jsonRes.Score = &score
+	}
 	return jsonRes
 }
 
@@ -322,7 +311,8 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	// Report best server results
 	if bestServer != nil {
-		_, _ = fmt.Fprintf(writer, "Fastest recommended server (based on uncached latency, high response reliability, and no latency-probe DNS failures): %s\n", bestServer.ServerAddress)
+		_, _ = fmt.Fprintf(writer, "Recommended server (lowest composite score — weighted cached/uncached latency, reliability-penalized): %s\n", bestServer.ServerAddress)
+		_, _ = fmt.Fprintf(writer, "  Composite Score:      %s\n", formatScore(bestServer.Score))
 		_, _ = fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgUncachedLatency, len(bestServer.UncachedLatencies) > 0),
 			formatStdDev(bestServer.StdDevUncachedLatency, len(bestServer.UncachedLatencies) > 1))
@@ -334,7 +324,7 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 		}
 		_, _ = fmt.Fprintf(writer, "  Reliability: %.1f%%\n", bestServer.Reliability)
 	} else {
-		_, _ = fmt.Fprintln(writer, "Could not determine a best server meeting reliability and accuracy criteria.")
+		_, _ = fmt.Fprintln(writer, "Could not determine a recommended server with a rankable composite score.")
 		// TODO: Optionally report the most reliable server regardless of other criteria if no 'best' is found.
 	}
 
@@ -344,91 +334,25 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	_, _ = fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
 }
 
-// findBestServer identifies the best server based on reliability, accuracy, and latency.
+// findBestServer returns the recommended server: the accuracy-eligible server
+// with the lowest composite Score. Reliability and DNS-failure rate are already
+// folded into Score, so the only hard gate here is accuracy (applied when
+// -accuracy-file is set). Unrankable servers (+Inf score) are skipped.
+// Returns nil if no eligible server exists.
 func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analysis.ServerResult {
-	const reliabilityThreshold = 99.0
 	var bestServer *analysis.ServerResult
-	lowestUncachedLatency := time.Duration(math.MaxInt64)
-
 	for _, res := range results {
-		// --- Filtering Criteria ---
-		if res.Reliability < reliabilityThreshold {
-			continue // Skip unreliable
+		if cfg.AccuracyCheckFile != "" && (res.IsAccurate == nil || !*res.IsAccurate) {
+			continue // accuracy gate: skip inaccurate/inconclusive
 		}
-		if res.DNSFailures > 0 {
-			continue // Skip resolvers that returned unexpected DNS rcodes during latency probes
+		if math.IsInf(res.Score, 1) {
+			continue // unrankable
 		}
-
-		isAccurate := true
-		if cfg.AccuracyCheckFile != "" {
-			isAccurate = res.IsAccurate != nil && *res.IsAccurate
-		}
-		if !isAccurate {
-			continue // Skip inaccurate or inconclusive accuracy results when accuracy is enabled
-		}
-
-		// --- Comparison Logic ---
-		if bestServer == nil {
-			bestServer = res // First reliable and accurate server
-			if len(res.UncachedLatencies) > 0 {
-				lowestUncachedLatency = res.AvgUncachedLatency
-			}
-			continue
-		}
-
-		// Compare based on uncached latency first
-		if compareUncachedLatency(res, bestServer, lowestUncachedLatency) {
+		if bestServer == nil || res.Score < bestServer.Score {
 			bestServer = res
-			if len(res.UncachedLatencies) > 0 { // Update lowest latency if current server has one
-				lowestUncachedLatency = res.AvgUncachedLatency
-			}
-			continue
-		}
-
-		// If uncached is equal or N/A, compare cached latency
-		if compareCachedLatency(res, bestServer) {
-			bestServer = res
-			// No need to update lowestUncachedLatency here
-			continue
 		}
 	}
 	return bestServer
-}
-
-func compareUncachedLatency(current, best *analysis.ServerResult, currentLowestUncached time.Duration) bool {
-	hasUncachedCurrent := len(current.UncachedLatencies) > 0
-	hasUncachedBest := len(best.UncachedLatencies) > 0
-
-	if hasUncachedCurrent && !hasUncachedBest {
-		return true // Current has uncached, best doesn't -> current is better
-	}
-	if !hasUncachedCurrent && hasUncachedBest {
-		return false // Current lacks uncached, best has it -> best is better
-	}
-	if hasUncachedCurrent && hasUncachedBest {
-		// Both have uncached results, compare directly
-		return current.AvgUncachedLatency < currentLowestUncached
-	}
-	// Neither has uncached results, no change based on this criteria
-	return false
-}
-
-func compareCachedLatency(current, best *analysis.ServerResult) bool {
-	hasCachedCurrent := len(current.CachedLatencies) > 0
-	hasCachedBest := len(best.CachedLatencies) > 0
-
-	if hasCachedCurrent && !hasCachedBest {
-		return true // Current has cached, best doesn't -> current is better
-	}
-	if !hasCachedCurrent && hasCachedBest {
-		return false // Current lacks cached, best has it -> best is better
-	}
-	if hasCachedCurrent && hasCachedBest {
-		// Both have cached results, compare directly
-		return current.AvgCachedLatency < best.AvgCachedLatency
-	}
-	// Neither has cached results, no change based on this criteria
-	return false
 }
 
 func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bestServer *analysis.ServerResult, cfg *config.Config) {
@@ -493,6 +417,26 @@ func formatStdDev(stdDev time.Duration, hasEnoughData bool) string {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.1f ms", float64(stdDev.Microseconds())/1000.0)
+}
+
+// formatScoreCSV formats a composite score for CSV output.
+// It returns an empty cell for an unrankable (+Inf) score, otherwise the score
+// in milliseconds with three decimal places.
+func formatScoreCSV(score float64) string {
+	if math.IsInf(score, 1) {
+		return ""
+	}
+	return fmt.Sprintf("%.3f", score)
+}
+
+// formatScore formats a composite score for console output.
+// It returns "N/A" for an unrankable (+Inf) score, otherwise the score in
+// milliseconds with one decimal place.
+func formatScore(score float64) string {
+	if math.IsInf(score, 1) {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.1f ms", score)
 }
 
 // formatDurationPointer formats a duration pointer for console output.

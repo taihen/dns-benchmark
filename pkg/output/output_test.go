@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,44 @@ func TestFormatBoolPointerCSV(t *testing.T) {
 	}
 }
 
+func TestFormatScoreCSV(t *testing.T) {
+	tests := []struct {
+		name  string
+		score float64
+		want  string
+	}{
+		{"finite", 12.3456, "12.346"},
+		{"zero", 0, "0.000"},
+		{"infinite", math.Inf(1), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatScoreCSV(tt.score); got != tt.want {
+				t.Errorf("formatScoreCSV() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatScore(t *testing.T) {
+	tests := []struct {
+		name  string
+		score float64
+		want  string
+	}{
+		{"finite", 12.34, "12.3 ms"},
+		{"zero", 0, "0.0 ms"},
+		{"infinite", math.Inf(1), "N/A"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatScore(tt.score); got != tt.want {
+				t.Errorf("formatScore() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- Tests for Main Output Functions ---
 
 // Helper to create sample results
@@ -194,6 +233,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 		StdDevUncachedLatency: 5 * time.Millisecond, // sqrt(((20-25)^2+(25-25)^2+(30-25)^2)/(3-1)) = sqrt((25+0+25)/2) = sqrt(25) = 5 ms
 		Reliability:           100.0,
 		Errors:                0,
+		Score:                 26.7, // distinct from AvgUncached so the Score column is independently assertable
 	}
 	res.Results["8.8.8.8:53"] = &analysis.ServerResult{
 		ServerAddress:         "8.8.8.8:53",
@@ -211,6 +251,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 		StdDevUncachedLatency: 0, // n=1
 		Reliability:           66.7,
 		Errors:                1,
+		Score:                 36.2, // distinct from AvgUncached so the Score column is independently assertable
 	}
 	res.Results["tls://9.9.9.9:853"] = &analysis.ServerResult{
 		ServerAddress:         "tls://9.9.9.9:853",
@@ -228,6 +269,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 		StdDevUncachedLatency: 0,
 		Reliability:           0.0,
 		Errors:                4,
+		Score:                 math.Inf(1),
 	}
 	return res
 }
@@ -253,6 +295,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "StdDev Cached")
 	assert.Contains(t, output, "Avg Uncached")
 	assert.Contains(t, output, "StdDev Uncached")
+	assert.Contains(t, output, "Score")
 	assert.Contains(t, output, "Reliability")
 	assert.Contains(t, output, ".com Latency")
 	assert.Contains(t, output, "DNSSEC")
@@ -260,7 +303,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "Rebind Protect")
 	assert.Contains(t, output, "Accuracy")
 
-	// Check server order (sorted by uncached latency)
+	// Check server order (sorted by composite Score ascending, unrankable last)
 	assert.Regexp(t, `1\.1\.1\.1:53.*8\.8\.8\.8:53.*tls://9\.9\.9\.9:853`, strings.ReplaceAll(output, "\n", " "))
 
 	// Check specific values for the best server (1.1.1.1)
@@ -268,6 +311,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "11.0 ms")   // Avg Cached
 	assert.Contains(t, output, "1.4 ms")    // StdDev Cached
 	assert.Contains(t, output, "25.0 ms")   // Avg Uncached
+	assert.Contains(t, output, "26.7 ms")   // Score (distinct from Avg Uncached)
 	assert.Contains(t, output, "5.0 ms")    // StdDev Uncached
 	assert.Contains(t, output, "100.0%")    // Reliability
 	assert.Contains(t, output, "15.0 ms")   // .com Latency
@@ -281,6 +325,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "15.0 ms") // Avg Cached
 	assert.Contains(t, output, "N/A")     // StdDev Cached (n=1)
 	assert.Contains(t, output, "35.0 ms") // Avg Uncached
+	assert.Contains(t, output, "36.2 ms") // Score (distinct from Avg Uncached)
 	// assert.Contains(t, output, "N/A")     // StdDev Uncached (n=1) - This might appear multiple times, check specific column context if needed
 	assert.Contains(t, output, "66.7%") // Reliability
 	// assert.Contains(t, output, "N/A")     // .com Latency
@@ -325,6 +370,7 @@ func TestWriteCSVResults(t *testing.T) {
 		"ServerAddress",
 		"AvgCachedLatency(ms)", "StdDevCachedLatency(ms)",
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
+		"Score(ms)",
 		"Reliability(%)",
 		"SuccessfulCachedQueries", "SuccessfulUncachedQueries",
 		"FailedLatencyQueries", "TimeoutErrors", "TransportErrors", "DNSFailures", "MalformedResponses", "TotalLatencyQueries",
@@ -340,20 +386,21 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "1.414", records[1][2])   // StdDev Cached
 	assert.Equal(t, "25.000", records[1][3])  // Avg Uncached
 	assert.Equal(t, "5.000", records[1][4])   // StdDev Uncached
-	assert.Equal(t, "100.0", records[1][5])   // Reliability
-	assert.Equal(t, "2", records[1][6])       // Success Cached
-	assert.Equal(t, "3", records[1][7])       // Success Uncached
-	assert.Equal(t, "0", records[1][8])       // Errors
-	assert.Equal(t, "0", records[1][9])       // Timeout Errors
-	assert.Equal(t, "0", records[1][10])      // Transport Errors
-	assert.Equal(t, "0", records[1][11])      // DNS Failures
-	assert.Equal(t, "0", records[1][12])      // Malformed Responses
-	assert.Equal(t, "5", records[1][13])      // Total Queries
-	assert.Equal(t, "15.000", records[1][14]) // Dotcom
-	assert.Equal(t, "true", records[1][15])   // DNSSEC
-	assert.Equal(t, "false", records[1][16])  // NXDOMAIN
-	assert.Equal(t, "true", records[1][17])   // Rebinding
-	assert.Equal(t, "true", records[1][18])   // Accuracy
+	assert.Equal(t, "26.700", records[1][5])  // Score
+	assert.Equal(t, "100.0", records[1][6])   // Reliability
+	assert.Equal(t, "2", records[1][7])       // Success Cached
+	assert.Equal(t, "3", records[1][8])       // Success Uncached
+	assert.Equal(t, "0", records[1][9])       // Errors
+	assert.Equal(t, "0", records[1][10])      // Timeout Errors
+	assert.Equal(t, "0", records[1][11])      // Transport Errors
+	assert.Equal(t, "0", records[1][12])      // DNS Failures
+	assert.Equal(t, "0", records[1][13])      // Malformed Responses
+	assert.Equal(t, "5", records[1][14])      // Total Queries
+	assert.Equal(t, "15.000", records[1][15]) // Dotcom
+	assert.Equal(t, "true", records[1][16])   // DNSSEC
+	assert.Equal(t, "false", records[1][17])  // NXDOMAIN
+	assert.Equal(t, "true", records[1][18])   // Rebinding
+	assert.Equal(t, "true", records[1][19])   // Accuracy
 
 	// Row 2: 8.8.8.8
 	assert.Equal(t, "8.8.8.8:53", records[2][0])
@@ -361,20 +408,21 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "N/A", records[2][2])    // StdDev Cached (n=1)
 	assert.Equal(t, "35.000", records[2][3]) // Avg Uncached
 	assert.Equal(t, "N/A", records[2][4])    // StdDev Uncached (n=1)
-	assert.Equal(t, "66.7", records[2][5])   // Reliability
-	assert.Equal(t, "1", records[2][6])      // Success Cached
-	assert.Equal(t, "1", records[2][7])      // Success Uncached
-	assert.Equal(t, "1", records[2][8])      // Errors
-	assert.Equal(t, "0", records[2][9])      // Timeout Errors
-	assert.Equal(t, "0", records[2][10])     // Transport Errors
-	assert.Equal(t, "0", records[2][11])     // DNS Failures
-	assert.Equal(t, "0", records[2][12])     // Malformed Responses
-	assert.Equal(t, "3", records[2][13])     // Total Queries
-	assert.Equal(t, "N/A", records[2][14])   // Dotcom
-	assert.Equal(t, "true", records[2][15])  // DNSSEC
-	assert.Equal(t, "N/A", records[2][16])   // NXDOMAIN
-	assert.Equal(t, "false", records[2][17]) // Rebinding
-	assert.Equal(t, "false", records[2][18]) // Accuracy
+	assert.Equal(t, "36.200", records[2][5]) // Score
+	assert.Equal(t, "66.7", records[2][6])   // Reliability
+	assert.Equal(t, "1", records[2][7])      // Success Cached
+	assert.Equal(t, "1", records[2][8])      // Success Uncached
+	assert.Equal(t, "1", records[2][9])      // Errors
+	assert.Equal(t, "0", records[2][10])     // Timeout Errors
+	assert.Equal(t, "0", records[2][11])     // Transport Errors
+	assert.Equal(t, "0", records[2][12])     // DNS Failures
+	assert.Equal(t, "0", records[2][13])     // Malformed Responses
+	assert.Equal(t, "3", records[2][14])     // Total Queries
+	assert.Equal(t, "N/A", records[2][15])   // Dotcom
+	assert.Equal(t, "true", records[2][16])  // DNSSEC
+	assert.Equal(t, "N/A", records[2][17])   // NXDOMAIN
+	assert.Equal(t, "false", records[2][18]) // Rebinding
+	assert.Equal(t, "false", records[2][19]) // Accuracy
 
 	// Row 3: 9.9.9.9
 	assert.Equal(t, "tls://9.9.9.9:853", records[3][0])
@@ -382,20 +430,21 @@ func TestWriteCSVResults(t *testing.T) {
 	assert.Equal(t, "N/A", records[3][2])  // StdDev Cached
 	assert.Equal(t, "N/A", records[3][3])  // Avg Uncached
 	assert.Equal(t, "N/A", records[3][4])  // StdDev Uncached
-	assert.Equal(t, "0.0", records[3][5])  // Reliability
-	assert.Equal(t, "0", records[3][6])    // Success Cached
-	assert.Equal(t, "0", records[3][7])    // Success Uncached
-	assert.Equal(t, "4", records[3][8])    // Errors
-	assert.Equal(t, "0", records[3][9])    // Timeout Errors
-	assert.Equal(t, "0", records[3][10])   // Transport Errors
-	assert.Equal(t, "0", records[3][11])   // DNS Failures
-	assert.Equal(t, "0", records[3][12])   // Malformed Responses
-	assert.Equal(t, "4", records[3][13])   // Total Queries
-	assert.Equal(t, "N/A", records[3][14]) // Dotcom
-	assert.Equal(t, "N/A", records[3][15]) // DNSSEC
-	assert.Equal(t, "N/A", records[3][16]) // NXDOMAIN
-	assert.Equal(t, "N/A", records[3][17]) // Rebinding
-	assert.Equal(t, "N/A", records[3][18]) // Accuracy
+	assert.Equal(t, "", records[3][5])     // Score (unrankable +Inf → empty)
+	assert.Equal(t, "0.0", records[3][6])  // Reliability
+	assert.Equal(t, "0", records[3][7])    // Success Cached
+	assert.Equal(t, "0", records[3][8])    // Success Uncached
+	assert.Equal(t, "4", records[3][9])    // Errors
+	assert.Equal(t, "0", records[3][10])   // Timeout Errors
+	assert.Equal(t, "0", records[3][11])   // Transport Errors
+	assert.Equal(t, "0", records[3][12])   // DNS Failures
+	assert.Equal(t, "0", records[3][13])   // Malformed Responses
+	assert.Equal(t, "4", records[3][14])   // Total Queries
+	assert.Equal(t, "N/A", records[3][15]) // Dotcom
+	assert.Equal(t, "N/A", records[3][16]) // DNSSEC
+	assert.Equal(t, "N/A", records[3][17]) // NXDOMAIN
+	assert.Equal(t, "N/A", records[3][18]) // Rebinding
+	assert.Equal(t, "N/A", records[3][19]) // Accuracy
 }
 
 func TestWriteJSONResults(t *testing.T) {
@@ -449,6 +498,8 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.True(t, *res1.BlocksRebinding)
 	assert.NotNil(t, res1.IsAccurate)
 	assert.True(t, *res1.IsAccurate)
+	assert.NotNil(t, res1.Score)
+	assert.InDelta(t, 26.7, *res1.Score, 1e-9)
 
 	// Check values for 8.8.8.8
 	res2 := jsonOutput[1]
@@ -472,6 +523,8 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.False(t, *res2.BlocksRebinding)
 	assert.NotNil(t, res2.IsAccurate)
 	assert.False(t, *res2.IsAccurate)
+	assert.NotNil(t, res2.Score)
+	assert.InDelta(t, 36.2, *res2.Score, 1e-9)
 
 	// Check values for 9.9.9.9
 	res3 := jsonOutput[2]
@@ -490,347 +543,120 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.Nil(t, res3.HijacksNXDOMAIN)
 	assert.Nil(t, res3.BlocksRebinding)
 	assert.Nil(t, res3.IsAccurate)
+	assert.Nil(t, res3.Score)
+}
+
+func TestBuildJSONResultScore(t *testing.T) {
+	cfg := &config.Config{}
+
+	finite := buildJSONResult(&analysis.ServerResult{ServerAddress: "1.1.1.1", Score: 12.5}, cfg)
+	require.NotNil(t, finite.Score)
+	assert.InDelta(t, 12.5, *finite.Score, 1e-9)
+
+	unrankable := buildJSONResult(&analysis.ServerResult{ServerAddress: "2.2.2.2", Score: math.Inf(1)}, cfg)
+	assert.Nil(t, unrankable.Score, "unrankable score must serialize as null")
 }
 
 // --- Additional tests ---
 
+func TestSortServerResultsByScore(t *testing.T) {
+	results := []*analysis.ServerResult{
+		{ServerAddress: "slow", Score: 50.0},
+		{ServerAddress: "fast", Score: 10.0},
+		{ServerAddress: "unrankable", Score: math.Inf(1)},
+		{ServerAddress: "mid", Score: 30.0},
+	}
+	sortServerResults(results)
+	got := []string{results[0].ServerAddress, results[1].ServerAddress, results[2].ServerAddress, results[3].ServerAddress}
+	want := []string{"fast", "mid", "slow", "unrankable"}
+	assert.Equal(t, want, got)
+}
+
+func TestSortServerResultsTieBreakByAddress(t *testing.T) {
+	results := []*analysis.ServerResult{
+		{ServerAddress: "b", Score: 10.0},
+		{ServerAddress: "a", Score: 10.0},
+	}
+	sortServerResults(results)
+	assert.Equal(t, "a", results[0].ServerAddress)
+	assert.Equal(t, "b", results[1].ServerAddress)
+}
+
 func TestFindBestServer(t *testing.T) {
-	bTrue := true
-	bFalse := false
+	bp := func(b bool) *bool { return &b }
 
 	tests := []struct {
-		name           string
-		results        []*analysis.ServerResult
-		cfg            *config.Config
-		wantServerAddr string
+		name     string
+		results  []*analysis.ServerResult
+		cfg      *config.Config
+		wantAddr string // "" means expect nil
 	}{
 		{
-			name:           "no results",
-			results:        []*analysis.ServerResult{},
-			cfg:            &config.Config{},
-			wantServerAddr: "",
+			name: "lowest score wins when no accuracy check",
+			results: []*analysis.ServerResult{
+				{ServerAddress: "fast", Score: 10.0},
+				{ServerAddress: "slow", Score: 40.0},
+			},
+			cfg:      &config.Config{},
+			wantAddr: "fast",
 		},
 		{
-			name: "single reliable server",
+			name: "unrankable servers are skipped",
 			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "1.1.1.1:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
+				{ServerAddress: "dead", Score: math.Inf(1)},
+				{ServerAddress: "ok", Score: 25.0},
 			},
-			cfg:            &config.Config{},
-			wantServerAddr: "1.1.1.1:53",
+			cfg:      &config.Config{},
+			wantAddr: "ok",
 		},
 		{
-			name: "skip unreliable server",
+			name: "accuracy gate excludes faster-but-inaccurate server",
 			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "unreliable.server:53",
-					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-					AvgUncachedLatency: 10 * time.Millisecond,
-					Reliability:        50.0, // Below 99% threshold
-				},
-				{
-					ServerAddress:      "reliable.server:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
+				{ServerAddress: "fast-wrong", Score: 5.0, IsAccurate: bp(false)},
+				{ServerAddress: "slower-right", Score: 20.0, IsAccurate: bp(true)},
 			},
-			cfg:            &config.Config{},
-			wantServerAddr: "reliable.server:53",
+			cfg:      &config.Config{AccuracyCheckFile: "accuracy.txt"},
+			wantAddr: "slower-right",
 		},
 		{
-			name: "skip inaccurate server",
+			name: "accuracy gate treats nil accuracy as ineligible",
 			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "inaccurate.server:53",
-					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-					AvgUncachedLatency: 10 * time.Millisecond,
-					Reliability:        100.0,
-					IsAccurate:         &bFalse,
-				},
-				{
-					ServerAddress:      "accurate.server:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-					IsAccurate:         &bTrue,
-				},
+				{ServerAddress: "unknown", Score: 5.0, IsAccurate: nil},
 			},
-			cfg:            &config.Config{AccuracyCheckFile: "enabled"},
-			wantServerAddr: "accurate.server:53",
+			cfg:      &config.Config{AccuracyCheckFile: "accuracy.txt"},
+			wantAddr: "",
 		},
 		{
-			name: "skip server with dns failures",
-			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "dns-failing.server:53",
-					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-					AvgUncachedLatency: 10 * time.Millisecond,
-					Reliability:        100.0,
-					DNSFailures:        3,
-				},
-				{
-					ServerAddress:      "clean.server:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
-			},
-			cfg:            &config.Config{},
-			wantServerAddr: "clean.server:53",
+			name:     "no servers yields nil",
+			results:  []*analysis.ServerResult{},
+			cfg:      &config.Config{},
+			wantAddr: "",
 		},
 		{
-			name: "skip inconclusive accuracy when accuracy check enabled",
+			name: "all unrankable yields nil",
 			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "inconclusive.server:53",
-					UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-					AvgUncachedLatency: 10 * time.Millisecond,
-					Reliability:        100.0,
-					IsAccurate:         nil,
-				},
-				{
-					ServerAddress:      "accurate.server:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-					IsAccurate:         &bTrue,
-				},
+				{ServerAddress: "dead1", Score: math.Inf(1)},
+				{ServerAddress: "dead2", Score: math.Inf(1)},
 			},
-			cfg:            &config.Config{AccuracyCheckFile: "enabled"},
-			wantServerAddr: "accurate.server:53",
-		},
-		{
-			name: "prefer faster uncached latency",
-			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "slower.server:53",
-					UncachedLatencies:  []time.Duration{50 * time.Millisecond},
-					AvgUncachedLatency: 50 * time.Millisecond,
-					Reliability:        100.0,
-				},
-				{
-					ServerAddress:      "faster.server:53",
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
-			},
-			cfg:            &config.Config{},
-			wantServerAddr: "faster.server:53",
-		},
-		{
-			name: "fallback to cached latency when uncached equal",
-			results: []*analysis.ServerResult{
-				{
-					ServerAddress:      "slower-cached.server:53",
-					CachedLatencies:    []time.Duration{30 * time.Millisecond},
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgCachedLatency:   30 * time.Millisecond,
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
-				{
-					ServerAddress:      "faster-cached.server:53",
-					CachedLatencies:    []time.Duration{10 * time.Millisecond},
-					UncachedLatencies:  []time.Duration{20 * time.Millisecond},
-					AvgCachedLatency:   10 * time.Millisecond,
-					AvgUncachedLatency: 20 * time.Millisecond,
-					Reliability:        100.0,
-				},
-			},
-			cfg:            &config.Config{},
-			wantServerAddr: "faster-cached.server:53",
-		},
-		{
-			name: "all unreliable returns nil",
-			results: []*analysis.ServerResult{
-				{
-					ServerAddress: "unreliable1:53",
-					Reliability:   50.0,
-				},
-				{
-					ServerAddress: "unreliable2:53",
-					Reliability:   80.0,
-				},
-			},
-			cfg:            &config.Config{},
-			wantServerAddr: "",
+			cfg:      &config.Config{},
+			wantAddr: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := findBestServer(tt.results, tt.cfg)
-			if tt.wantServerAddr == "" {
-				assert.Nil(t, result, "Expected no best server")
-			} else {
-				require.NotNil(t, result, "Expected a best server")
-				assert.Equal(t, tt.wantServerAddr, result.ServerAddress)
+			got := findBestServer(tt.results, tt.cfg)
+			if tt.wantAddr == "" {
+				assert.Nil(t, got)
+				return
 			}
-		})
-	}
-}
-
-func TestCompareUncachedLatency(t *testing.T) {
-	tests := []struct {
-		name           string
-		current        *analysis.ServerResult
-		best           *analysis.ServerResult
-		lowestUncached time.Duration
-		want           bool
-	}{
-		{
-			name: "current has uncached, best doesn't",
-			current: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgUncachedLatency: 10 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				UncachedLatencies: []time.Duration{},
-			},
-			lowestUncached: time.Duration(1<<63 - 1),
-			want:           true,
-		},
-		{
-			name: "best has uncached, current doesn't",
-			current: &analysis.ServerResult{
-				UncachedLatencies: []time.Duration{},
-			},
-			best: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgUncachedLatency: 10 * time.Millisecond,
-			},
-			lowestUncached: 10 * time.Millisecond,
-			want:           false,
-		},
-		{
-			name: "current faster than best",
-			current: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{5 * time.Millisecond},
-				AvgUncachedLatency: 5 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgUncachedLatency: 10 * time.Millisecond,
-			},
-			lowestUncached: 10 * time.Millisecond,
-			want:           true,
-		},
-		{
-			name: "current slower than best",
-			current: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{15 * time.Millisecond},
-				AvgUncachedLatency: 15 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				UncachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgUncachedLatency: 10 * time.Millisecond,
-			},
-			lowestUncached: 10 * time.Millisecond,
-			want:           false,
-		},
-		{
-			name: "neither has uncached",
-			current: &analysis.ServerResult{
-				UncachedLatencies: []time.Duration{},
-			},
-			best: &analysis.ServerResult{
-				UncachedLatencies: []time.Duration{},
-			},
-			lowestUncached: time.Duration(1<<63 - 1),
-			want:           false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := compareUncachedLatency(tt.current, tt.best, tt.lowestUncached)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestCompareCachedLatency(t *testing.T) {
-	tests := []struct {
-		name    string
-		current *analysis.ServerResult
-		best    *analysis.ServerResult
-		want    bool
-	}{
-		{
-			name: "current has cached, best doesn't",
-			current: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgCachedLatency: 10 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				CachedLatencies: []time.Duration{},
-			},
-			want: true,
-		},
-		{
-			name: "best has cached, current doesn't",
-			current: &analysis.ServerResult{
-				CachedLatencies: []time.Duration{},
-			},
-			best: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgCachedLatency: 10 * time.Millisecond,
-			},
-			want: false,
-		},
-		{
-			name: "current faster cached",
-			current: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{5 * time.Millisecond},
-				AvgCachedLatency: 5 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgCachedLatency: 10 * time.Millisecond,
-			},
-			want: true,
-		},
-		{
-			name: "current slower cached",
-			current: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{15 * time.Millisecond},
-				AvgCachedLatency: 15 * time.Millisecond,
-			},
-			best: &analysis.ServerResult{
-				CachedLatencies:  []time.Duration{10 * time.Millisecond},
-				AvgCachedLatency: 10 * time.Millisecond,
-			},
-			want: false,
-		},
-		{
-			name: "neither has cached",
-			current: &analysis.ServerResult{
-				CachedLatencies: []time.Duration{},
-			},
-			best: &analysis.ServerResult{
-				CachedLatencies: []time.Duration{},
-			},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := compareCachedLatency(tt.current, tt.best)
-			assert.Equal(t, tt.want, got)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantAddr, got.ServerAddress)
 		})
 	}
 }
 
 func TestPrintSummary(t *testing.T) {
-	bTrue := true
-	bFalse := false
 	dotcomLatency := 15 * time.Millisecond
 
 	tests := []struct {
@@ -854,37 +680,43 @@ func TestPrintSummary(t *testing.T) {
 					StdDevUncachedLatency: 2 * time.Millisecond,
 					Reliability:           100.0,
 					DotcomLatency:         &dotcomLatency,
+					Score:                 18.0,
 				}
 				return res
 			}(),
 			cfg: &config.Config{CheckDotcom: true},
 			wantContains: []string{
 				"--- Conclusion ---",
-				"Fastest recommended server",
+				"Recommended server (lowest composite score",
 				"1.1.1.1:53",
+				"Composite Score:",
 				"Avg Uncached Latency",
 				"Avg Cached Latency",
 				".com Latency",
 				"Reliability: 100.0%",
 			},
+			wantAbsent: []string{
+				"Fastest recommended server",
+			},
 		},
 		{
-			name: "no reliable servers",
+			name: "no eligible servers",
 			results: func() *analysis.BenchmarkResults {
 				res := analysis.NewBenchmarkResults()
-				res.Results["unreliable:53"] = &analysis.ServerResult{
-					ServerAddress: "unreliable:53",
+				res.Results["unrankable:53"] = &analysis.ServerResult{
+					ServerAddress: "unrankable:53",
 					Reliability:   50.0,
+					Score:         math.Inf(1),
 				}
 				return res
 			}(),
 			cfg: &config.Config{},
 			wantContains: []string{
 				"--- Conclusion ---",
-				"Could not determine a best server",
+				"Could not determine a recommended server with a rankable composite score.",
 			},
 			wantAbsent: []string{
-				"Fastest reliable server",
+				"Recommended server",
 			},
 		},
 		{
@@ -913,9 +745,6 @@ func TestPrintSummary(t *testing.T) {
 			}
 		})
 	}
-	// Use variables to avoid unused warnings
-	_ = bTrue
-	_ = bFalse
 }
 
 func TestPrintServerWarnings(t *testing.T) {
