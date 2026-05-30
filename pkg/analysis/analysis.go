@@ -21,6 +21,16 @@ func (qt QueryType) String() string {
 	return "Uncached"
 }
 
+// Composite-score weights (modern-web bias): uncached dominates because the
+// modern web assembles pages from many uncached third-party domains. When a
+// metric has no data (dotcom is off by default), the present weights are
+// renormalized to sum to 1, keeping the score magnitude comparable.
+const (
+	weightUncached = 0.50
+	weightCached   = 0.25
+	weightDotcom   = 0.25
+)
+
 // Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
@@ -46,6 +56,7 @@ type ServerResult struct {
 	AvgUncachedLatency    time.Duration
 	StdDevUncachedLatency time.Duration
 	Reliability           float64 // Based on latency query success rate
+	Score                 float64 // Composite performance score in ms (lower is better); +Inf if unrankable
 }
 
 // BenchmarkResults holds the results for all tested servers.
@@ -90,6 +101,9 @@ func (sr *ServerResult) CalculateMetrics() {
 		sr.AvgUncachedLatency = 0
 		sr.StdDevUncachedLatency = 0
 	}
+
+	// Composite performance score (depends on the averages computed above).
+	sr.Score = computeScore(sr)
 }
 
 // calculateAverage computes the average duration from a slice of time.Duration values.
@@ -125,6 +139,53 @@ func calculateStdDev(latencies []time.Duration, average time.Duration) time.Dura
 	variance := sumOfSquares / float64(len(latencies)-1)
 	stdDevNano := math.Sqrt(variance)
 	return time.Duration(math.Round(stdDevNano))
+}
+
+// durationMs converts a duration to milliseconds as a float. It divides
+// microseconds rather than calling d.Milliseconds(), which would truncate
+// sub-millisecond latencies to zero.
+func durationMs(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000.0
+}
+
+// computeScore returns the composite performance score in milliseconds (lower
+// is better). It blends the present latency metrics with modern-web weights,
+// renormalizing over whichever metrics have data, then divides by the effective
+// reliability (probe success rate minus the wrong-rcode DNS-failure rate).
+// It returns math.Inf(1) when the server cannot be ranked: no latency samples,
+// no queries attempted, or zero effective reliability.
+func computeScore(sr *ServerResult) float64 {
+	var weightedSum, weightTotal float64
+	if len(sr.UncachedLatencies) > 0 {
+		weightedSum += weightUncached * durationMs(sr.AvgUncachedLatency)
+		weightTotal += weightUncached
+	}
+	if len(sr.CachedLatencies) > 0 {
+		weightedSum += weightCached * durationMs(sr.AvgCachedLatency)
+		weightTotal += weightCached
+	}
+	if sr.DotcomLatency != nil {
+		weightedSum += weightDotcom * durationMs(*sr.DotcomLatency)
+		weightTotal += weightDotcom
+	}
+	if weightTotal == 0 {
+		return math.Inf(1) // no latency data to rank on
+	}
+	base := weightedSum / weightTotal
+
+	if sr.TotalQueries <= 0 {
+		return math.Inf(1)
+	}
+	successful := len(sr.CachedLatencies) + len(sr.UncachedLatencies)
+	usable := successful - sr.DNSFailures
+	if usable < 0 {
+		usable = 0
+	}
+	effRel := float64(usable) / float64(sr.TotalQueries)
+	if effRel <= 0 {
+		return math.Inf(1)
+	}
+	return base / effRel
 }
 
 // Analyze computes metrics for all server results within BenchmarkResults.

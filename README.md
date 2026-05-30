@@ -46,6 +46,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **Uncached Latency:** Average and Standard Deviation for resolving unique, likely uncached domains.
   - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
   - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
+  - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it is the default ranking key for the table and the recommendation. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
@@ -57,8 +58,8 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
-  - Formatted console table with results sorted by uncached latency.
-  - Console summary recommending the fastest server with high response reliability, no latency-probe DNS failures, and confirmed accuracy when the accuracy check is enabled.
+  - Formatted console table with results sorted by composite score (lowest first).
+  - Console summary recommending the server with the best composite score (a modern-web-weighted blend of uncached, cached, and .com latency, penalized by reliability and DNS-failure rate), with confirmed accuracy when the accuracy check is enabled.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
