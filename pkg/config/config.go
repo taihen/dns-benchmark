@@ -69,6 +69,8 @@ func (si ServerInfo) String() string {
 // Label returns the friendly display name for the protocol (e.g. "DoT").
 func (p ProtocolType) Label() string {
 	switch p {
+	case UDP:
+		return "UDP"
 	case TCP:
 		return "TCP"
 	case DOT:
@@ -78,7 +80,7 @@ func (p ProtocolType) Label() string {
 	case DOQ:
 		return "DoQ"
 	default:
-		return "UDP"
+		return string(p)
 	}
 }
 
