@@ -141,11 +141,11 @@ func calculateStdDev(latencies []time.Duration, average time.Duration) time.Dura
 	return time.Duration(math.Round(stdDevNano))
 }
 
-// durationMs converts a duration to milliseconds as a float. It divides
-// microseconds rather than calling d.Milliseconds(), which would truncate
-// sub-millisecond latencies to zero.
+// durationMs converts a duration to milliseconds as a float, dividing the raw
+// nanosecond value so no sub-millisecond precision is lost (unlike
+// d.Milliseconds() or d.Microseconds(), which truncate).
 func durationMs(d time.Duration) float64 {
-	return float64(d.Microseconds()) / 1000.0
+	return float64(d) / float64(time.Millisecond)
 }
 
 // computeScore returns the composite performance score in milliseconds (lower
