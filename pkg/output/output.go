@@ -316,7 +316,11 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	// Report best server results
 	if bestServer != nil {
-		_, _ = fmt.Fprintf(writer, "Recommended server: %s using %s protocol\n", bestServer.ServerAddress, bestServer.Protocol)
+		if bestServer.Protocol != "" {
+			_, _ = fmt.Fprintf(writer, "Recommended server: %s using %s protocol\n", bestServer.ServerAddress, bestServer.Protocol)
+		} else {
+			_, _ = fmt.Fprintf(writer, "Recommended server: %s\n", bestServer.ServerAddress)
+		}
 		_, _ = fmt.Fprintf(writer, "  Composite Score:      %s\n", formatScore(bestServer.Score))
 		_, _ = fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgUncachedLatency, len(bestServer.UncachedLatencies) > 0),
