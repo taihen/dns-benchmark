@@ -516,7 +516,7 @@ func (b *Benchmarker) Run() *analysis.BenchmarkResults {
 
 	// Initialize Results map
 	for _, server := range servers {
-		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String()}
+		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String(), Protocol: server.Protocol.Label()}
 	}
 
 	// Run Latency Benchmark

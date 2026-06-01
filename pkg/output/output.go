@@ -109,7 +109,7 @@ func sortServerResults(results []*analysis.ServerResult) {
 // buildHeader constructs the header row for console output.
 // It includes columns for server address, latency metrics, reliability, and optional checks.
 func buildHeader(cfg *config.Config) []string {
-	header := []string{"DNS Server", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Score", "Reliability"}
+	header := []string{"DNS Server", "Protocol", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Score", "Reliability"}
 	if cfg.CheckDotcom {
 		header = append(header, ".com Latency")
 	}
@@ -133,6 +133,7 @@ func buildHeader(cfg *config.Config) []string {
 func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	row := []string{
 		res.ServerAddress,
+		res.Protocol,
 		formatLatency(res.AvgCachedLatency, len(res.CachedLatencies) > 0),
 		formatStdDev(res.StdDevCachedLatency, len(res.CachedLatencies) > 1),
 		formatLatency(res.AvgUncachedLatency, len(res.UncachedLatencies) > 0),
@@ -163,6 +164,7 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 func buildCSVHeader(cfg *config.Config) []string {
 	header := []string{
 		"ServerAddress",
+		"Protocol",
 		"AvgCachedLatency(ms)", "StdDevCachedLatency(ms)",
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
 		"Score(ms)",
@@ -193,6 +195,7 @@ func buildCSVHeader(cfg *config.Config) []string {
 func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	row := []string{
 		res.ServerAddress,
+		res.Protocol,
 		formatMillisFloat(res.AvgCachedLatency, len(res.CachedLatencies) > 0),
 		formatMillisFloat(res.StdDevCachedLatency, len(res.CachedLatencies) > 1),
 		formatMillisFloat(res.AvgUncachedLatency, len(res.UncachedLatencies) > 0),
@@ -230,6 +233,7 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 // It specifies how ServerResult data is serialized into JSON format.
 type JSONServerResult struct {
 	ServerAddress             string   `json:"serverAddress"`
+	Protocol                  string   `json:"protocol"`
 	AvgCachedLatencyMs        *float64 `json:"avgCachedLatencyMs,omitempty"`
 	StdDevCachedLatencyMs     *float64 `json:"stdDevCachedLatencyMs,omitempty"`
 	AvgUncachedLatencyMs      *float64 `json:"avgUncachedLatencyMs,omitempty"`
@@ -257,6 +261,7 @@ type JSONServerResult struct {
 func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerResult {
 	jsonRes := JSONServerResult{
 		ServerAddress:             res.ServerAddress,
+		Protocol:                  res.Protocol,
 		ReliabilityPct:            res.Reliability,
 		SuccessfulCachedQueries:   len(res.CachedLatencies),
 		SuccessfulUncachedQueries: len(res.UncachedLatencies),
@@ -311,7 +316,11 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 
 	// Report best server results
 	if bestServer != nil {
-		_, _ = fmt.Fprintf(writer, "Recommended server (lowest composite score — weighted cached/uncached latency, reliability-penalized): %s\n", bestServer.ServerAddress)
+		if bestServer.Protocol != "" {
+			_, _ = fmt.Fprintf(writer, "Recommended server: %s using %s protocol\n", bestServer.ServerAddress, bestServer.Protocol)
+		} else {
+			_, _ = fmt.Fprintf(writer, "Recommended server: %s\n", bestServer.ServerAddress)
+		}
 		_, _ = fmt.Fprintf(writer, "  Composite Score:      %s\n", formatScore(bestServer.Score))
 		_, _ = fmt.Fprintf(writer, "  Avg Uncached Latency: %s (StdDev: %s)\n",
 			formatLatency(bestServer.AvgUncachedLatency, len(bestServer.UncachedLatencies) > 0),

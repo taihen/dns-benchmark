@@ -219,6 +219,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 	res := analysis.NewBenchmarkResults()
 	res.Results["1.1.1.1:53"] = &analysis.ServerResult{
 		ServerAddress:         "1.1.1.1:53",
+		Protocol:              "UDP",
 		CachedLatencies:       []time.Duration{10 * time.Millisecond, 12 * time.Millisecond},
 		UncachedLatencies:     []time.Duration{20 * time.Millisecond, 25 * time.Millisecond, 30 * time.Millisecond},
 		TotalQueries:          5,
@@ -237,6 +238,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 	}
 	res.Results["8.8.8.8:53"] = &analysis.ServerResult{
 		ServerAddress:         "8.8.8.8:53",
+		Protocol:              "UDP",
 		CachedLatencies:       []time.Duration{15 * time.Millisecond},
 		UncachedLatencies:     []time.Duration{35 * time.Millisecond},
 		TotalQueries:          3, // One error
@@ -255,6 +257,7 @@ func createSampleResults() *analysis.BenchmarkResults {
 	}
 	res.Results["tls://9.9.9.9:853"] = &analysis.ServerResult{
 		ServerAddress:         "tls://9.9.9.9:853",
+		Protocol:              "DoT",
 		CachedLatencies:       []time.Duration{}, // All errors
 		UncachedLatencies:     []time.Duration{}, // All errors
 		TotalQueries:          4,
@@ -291,6 +294,8 @@ func TestPrintConsoleResults(t *testing.T) {
 
 	// Basic checks - presence of headers and server addresses
 	assert.Contains(t, output, "DNS Server")
+	assert.Contains(t, output, "Protocol")
+	assert.Contains(t, output, "DoT") // protocol label for tls://9.9.9.9:853
 	assert.Contains(t, output, "Avg Cached")
 	assert.Contains(t, output, "StdDev Cached")
 	assert.Contains(t, output, "Avg Uncached")
@@ -368,6 +373,7 @@ func TestWriteCSVResults(t *testing.T) {
 	// Check Header
 	expectedHeader := []string{
 		"ServerAddress",
+		"Protocol",
 		"AvgCachedLatency(ms)", "StdDevCachedLatency(ms)",
 		"AvgUncachedLatency(ms)", "StdDevUncachedLatency(ms)",
 		"Score(ms)",
@@ -382,69 +388,72 @@ func TestWriteCSVResults(t *testing.T) {
 	// Check Data Rows (order is sorted: 1.1.1.1, 8.8.8.8, 9.9.9.9)
 	// Row 1: 1.1.1.1
 	assert.Equal(t, "1.1.1.1:53", records[1][0])
-	assert.Equal(t, "11.000", records[1][1])  // Avg Cached
-	assert.Equal(t, "1.414", records[1][2])   // StdDev Cached
-	assert.Equal(t, "25.000", records[1][3])  // Avg Uncached
-	assert.Equal(t, "5.000", records[1][4])   // StdDev Uncached
-	assert.Equal(t, "26.700", records[1][5])  // Score
-	assert.Equal(t, "100.0", records[1][6])   // Reliability
-	assert.Equal(t, "2", records[1][7])       // Success Cached
-	assert.Equal(t, "3", records[1][8])       // Success Uncached
-	assert.Equal(t, "0", records[1][9])       // Errors
-	assert.Equal(t, "0", records[1][10])      // Timeout Errors
-	assert.Equal(t, "0", records[1][11])      // Transport Errors
-	assert.Equal(t, "0", records[1][12])      // DNS Failures
-	assert.Equal(t, "0", records[1][13])      // Malformed Responses
-	assert.Equal(t, "5", records[1][14])      // Total Queries
-	assert.Equal(t, "15.000", records[1][15]) // Dotcom
-	assert.Equal(t, "true", records[1][16])   // DNSSEC
-	assert.Equal(t, "false", records[1][17])  // NXDOMAIN
-	assert.Equal(t, "true", records[1][18])   // Rebinding
-	assert.Equal(t, "true", records[1][19])   // Accuracy
+	assert.Equal(t, "UDP", records[1][1])     // Protocol
+	assert.Equal(t, "11.000", records[1][2])  // Avg Cached
+	assert.Equal(t, "1.414", records[1][3])   // StdDev Cached
+	assert.Equal(t, "25.000", records[1][4])  // Avg Uncached
+	assert.Equal(t, "5.000", records[1][5])   // StdDev Uncached
+	assert.Equal(t, "26.700", records[1][6])  // Score
+	assert.Equal(t, "100.0", records[1][7])   // Reliability
+	assert.Equal(t, "2", records[1][8])       // Success Cached
+	assert.Equal(t, "3", records[1][9])       // Success Uncached
+	assert.Equal(t, "0", records[1][10])      // Errors
+	assert.Equal(t, "0", records[1][11])      // Timeout Errors
+	assert.Equal(t, "0", records[1][12])      // Transport Errors
+	assert.Equal(t, "0", records[1][13])      // DNS Failures
+	assert.Equal(t, "0", records[1][14])      // Malformed Responses
+	assert.Equal(t, "5", records[1][15])      // Total Queries
+	assert.Equal(t, "15.000", records[1][16]) // Dotcom
+	assert.Equal(t, "true", records[1][17])   // DNSSEC
+	assert.Equal(t, "false", records[1][18])  // NXDOMAIN
+	assert.Equal(t, "true", records[1][19])   // Rebinding
+	assert.Equal(t, "true", records[1][20])   // Accuracy
 
 	// Row 2: 8.8.8.8
 	assert.Equal(t, "8.8.8.8:53", records[2][0])
-	assert.Equal(t, "15.000", records[2][1]) // Avg Cached
-	assert.Equal(t, "N/A", records[2][2])    // StdDev Cached (n=1)
-	assert.Equal(t, "35.000", records[2][3]) // Avg Uncached
-	assert.Equal(t, "N/A", records[2][4])    // StdDev Uncached (n=1)
-	assert.Equal(t, "36.200", records[2][5]) // Score
-	assert.Equal(t, "66.7", records[2][6])   // Reliability
-	assert.Equal(t, "1", records[2][7])      // Success Cached
-	assert.Equal(t, "1", records[2][8])      // Success Uncached
-	assert.Equal(t, "1", records[2][9])      // Errors
-	assert.Equal(t, "0", records[2][10])     // Timeout Errors
-	assert.Equal(t, "0", records[2][11])     // Transport Errors
-	assert.Equal(t, "0", records[2][12])     // DNS Failures
-	assert.Equal(t, "0", records[2][13])     // Malformed Responses
-	assert.Equal(t, "3", records[2][14])     // Total Queries
-	assert.Equal(t, "N/A", records[2][15])   // Dotcom
-	assert.Equal(t, "true", records[2][16])  // DNSSEC
-	assert.Equal(t, "N/A", records[2][17])   // NXDOMAIN
-	assert.Equal(t, "false", records[2][18]) // Rebinding
-	assert.Equal(t, "false", records[2][19]) // Accuracy
+	assert.Equal(t, "UDP", records[2][1])    // Protocol
+	assert.Equal(t, "15.000", records[2][2]) // Avg Cached
+	assert.Equal(t, "N/A", records[2][3])    // StdDev Cached (n=1)
+	assert.Equal(t, "35.000", records[2][4]) // Avg Uncached
+	assert.Equal(t, "N/A", records[2][5])    // StdDev Uncached (n=1)
+	assert.Equal(t, "36.200", records[2][6]) // Score
+	assert.Equal(t, "66.7", records[2][7])   // Reliability
+	assert.Equal(t, "1", records[2][8])      // Success Cached
+	assert.Equal(t, "1", records[2][9])      // Success Uncached
+	assert.Equal(t, "1", records[2][10])     // Errors
+	assert.Equal(t, "0", records[2][11])     // Timeout Errors
+	assert.Equal(t, "0", records[2][12])     // Transport Errors
+	assert.Equal(t, "0", records[2][13])     // DNS Failures
+	assert.Equal(t, "0", records[2][14])     // Malformed Responses
+	assert.Equal(t, "3", records[2][15])     // Total Queries
+	assert.Equal(t, "N/A", records[2][16])   // Dotcom
+	assert.Equal(t, "true", records[2][17])  // DNSSEC
+	assert.Equal(t, "N/A", records[2][18])   // NXDOMAIN
+	assert.Equal(t, "false", records[2][19]) // Rebinding
+	assert.Equal(t, "false", records[2][20]) // Accuracy
 
 	// Row 3: 9.9.9.9
 	assert.Equal(t, "tls://9.9.9.9:853", records[3][0])
-	assert.Equal(t, "N/A", records[3][1])  // Avg Cached
-	assert.Equal(t, "N/A", records[3][2])  // StdDev Cached
-	assert.Equal(t, "N/A", records[3][3])  // Avg Uncached
-	assert.Equal(t, "N/A", records[3][4])  // StdDev Uncached
-	assert.Equal(t, "", records[3][5])     // Score (unrankable +Inf → empty)
-	assert.Equal(t, "0.0", records[3][6])  // Reliability
-	assert.Equal(t, "0", records[3][7])    // Success Cached
-	assert.Equal(t, "0", records[3][8])    // Success Uncached
-	assert.Equal(t, "4", records[3][9])    // Errors
-	assert.Equal(t, "0", records[3][10])   // Timeout Errors
-	assert.Equal(t, "0", records[3][11])   // Transport Errors
-	assert.Equal(t, "0", records[3][12])   // DNS Failures
-	assert.Equal(t, "0", records[3][13])   // Malformed Responses
-	assert.Equal(t, "4", records[3][14])   // Total Queries
-	assert.Equal(t, "N/A", records[3][15]) // Dotcom
-	assert.Equal(t, "N/A", records[3][16]) // DNSSEC
-	assert.Equal(t, "N/A", records[3][17]) // NXDOMAIN
-	assert.Equal(t, "N/A", records[3][18]) // Rebinding
-	assert.Equal(t, "N/A", records[3][19]) // Accuracy
+	assert.Equal(t, "DoT", records[3][1])  // Protocol
+	assert.Equal(t, "N/A", records[3][2])  // Avg Cached
+	assert.Equal(t, "N/A", records[3][3])  // StdDev Cached
+	assert.Equal(t, "N/A", records[3][4])  // Avg Uncached
+	assert.Equal(t, "N/A", records[3][5])  // StdDev Uncached
+	assert.Equal(t, "", records[3][6])     // Score (unrankable +Inf → empty)
+	assert.Equal(t, "0.0", records[3][7])  // Reliability
+	assert.Equal(t, "0", records[3][8])    // Success Cached
+	assert.Equal(t, "0", records[3][9])    // Success Uncached
+	assert.Equal(t, "4", records[3][10])   // Errors
+	assert.Equal(t, "0", records[3][11])   // Timeout Errors
+	assert.Equal(t, "0", records[3][12])   // Transport Errors
+	assert.Equal(t, "0", records[3][13])   // DNS Failures
+	assert.Equal(t, "0", records[3][14])   // Malformed Responses
+	assert.Equal(t, "4", records[3][15])   // Total Queries
+	assert.Equal(t, "N/A", records[3][16]) // Dotcom
+	assert.Equal(t, "N/A", records[3][17]) // DNSSEC
+	assert.Equal(t, "N/A", records[3][18]) // NXDOMAIN
+	assert.Equal(t, "N/A", records[3][19]) // Rebinding
+	assert.Equal(t, "N/A", records[3][20]) // Accuracy
 }
 
 func TestWriteJSONResults(t *testing.T) {
@@ -471,6 +480,11 @@ func TestWriteJSONResults(t *testing.T) {
 	assert.Equal(t, "1.1.1.1:53", jsonOutput[0].ServerAddress)
 	assert.Equal(t, "8.8.8.8:53", jsonOutput[1].ServerAddress)
 	assert.Equal(t, "tls://9.9.9.9:853", jsonOutput[2].ServerAddress)
+
+	// Check protocol labels
+	assert.Equal(t, "UDP", jsonOutput[0].Protocol)
+	assert.Equal(t, "UDP", jsonOutput[1].Protocol)
+	assert.Equal(t, "DoT", jsonOutput[2].Protocol)
 
 	// Check values for 1.1.1.1
 	res1 := jsonOutput[0]
@@ -672,6 +686,7 @@ func TestPrintSummary(t *testing.T) {
 				res := analysis.NewBenchmarkResults()
 				res.Results["1.1.1.1:53"] = &analysis.ServerResult{
 					ServerAddress:         "1.1.1.1:53",
+					Protocol:              "UDP",
 					CachedLatencies:       []time.Duration{10 * time.Millisecond},
 					UncachedLatencies:     []time.Duration{20 * time.Millisecond},
 					AvgCachedLatency:      10 * time.Millisecond,
@@ -687,7 +702,7 @@ func TestPrintSummary(t *testing.T) {
 			cfg: &config.Config{CheckDotcom: true},
 			wantContains: []string{
 				"--- Conclusion ---",
-				"Recommended server (lowest composite score",
+				"Recommended server: 1.1.1.1:53 using UDP protocol",
 				"1.1.1.1:53",
 				"Composite Score:",
 				"Avg Uncached Latency",

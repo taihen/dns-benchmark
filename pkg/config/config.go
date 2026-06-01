@@ -66,6 +66,24 @@ func (si ServerInfo) String() string {
 	}
 }
 
+// Label returns the friendly display name for the protocol (e.g. "DoT").
+func (p ProtocolType) Label() string {
+	switch p {
+	case UDP:
+		return "UDP"
+	case TCP:
+		return "TCP"
+	case DOT:
+		return "DoT"
+	case DOH:
+		return "DoH"
+	case DOQ:
+		return "DoQ"
+	default:
+		return string(p)
+	}
+}
+
 var resolvConfNameserverRegex = regexp.MustCompile(`^\s*nameserver\s+([^\s]+)\s*$`)
 
 // Config holds the application configuration derived from flags and files.
