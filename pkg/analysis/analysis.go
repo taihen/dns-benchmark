@@ -34,6 +34,7 @@ const (
 // Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	Protocol           string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
 	CachedLatencies    []time.Duration
 	UncachedLatencies  []time.Duration
 	Errors             int // Latency probes that failed before a structurally valid DNS response was received
