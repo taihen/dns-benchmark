@@ -571,6 +571,35 @@ func TestBuildJSONResultScore(t *testing.T) {
 	assert.Nil(t, unrankable.Score, "unrankable score must serialize as null")
 }
 
+func TestBuildRow_NeverAttemptedServerShowsNAReliability(t *testing.T) {
+	cfg := &config.Config{}
+	res := &analysis.ServerResult{
+		ServerAddress: "1.1.1.1:53",
+		Protocol:      "UDP",
+		TotalQueries:  4,
+		Skipped:       4, // interrupted before any probe was attempted
+	}
+	row := buildRow(res, cfg)
+	assert.Equal(t, "N/A", row[7], "reliability must read N/A, not 0.0%%, when nothing was attempted")
+}
+
+func TestPrintServerWarnings_NoLowReliabilityWarningWhenNeverAttempted(t *testing.T) {
+	var buf bytes.Buffer
+	results := []*analysis.ServerResult{
+		{ServerAddress: "skipped:53", TotalQueries: 4, Skipped: 4, Reliability: 0.0},
+	}
+	printServerWarnings(&buf, results, nil, &config.Config{})
+	assert.NotContains(t, buf.String(), "Low reliability", "never-attempted servers must not be flagged as unreliable")
+}
+
+func TestBuildJSONResultSkippedQueries(t *testing.T) {
+	cfg := &config.Config{}
+
+	interrupted := buildJSONResult(&analysis.ServerResult{ServerAddress: "1.1.1.1", TotalQueries: 10, Skipped: 6}, cfg)
+	assert.Equal(t, 6, interrupted.SkippedQueries, "skipped queries must be reported for interrupted runs")
+	assert.Equal(t, 10, interrupted.TotalLatencyQueries)
+}
+
 // --- Additional tests ---
 
 func TestSortServerResultsByScore(t *testing.T) {
@@ -779,6 +808,7 @@ func TestPrintServerWarnings(t *testing.T) {
 			results: []*analysis.ServerResult{
 				{
 					ServerAddress: "unreliable:53",
+					TotalQueries:  4, // probes were attempted; low reliability is real
 					Reliability:   50.0,
 				},
 			},

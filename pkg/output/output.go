@@ -139,7 +139,7 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatLatency(res.AvgUncachedLatency, len(res.UncachedLatencies) > 0),
 		formatStdDev(res.StdDevUncachedLatency, len(res.UncachedLatencies) > 1),
 		formatScore(res.Score),
-		fmt.Sprintf("%.1f%%", res.Reliability),
+		formatReliability(res),
 	}
 	if cfg.CheckDotcom {
 		row = append(row, formatDurationPointer(res.DotcomLatency))
@@ -250,6 +250,7 @@ type JSONServerResult struct {
 	DNSFailures               int      `json:"dnsFailures"`
 	MalformedResponses        int      `json:"malformedResponses"`
 	TotalLatencyQueries       int      `json:"totalLatencyQueries"`
+	SkippedQueries            int      `json:"skippedQueries,omitempty"` // Queries not attempted due to interruption
 	SupportsDNSSEC            *bool    `json:"supportsDnssec,omitempty"`
 	HijacksNXDOMAIN           *bool    `json:"hijacksNxdomain,omitempty"`
 	BlocksRebinding           *bool    `json:"blocksRebinding,omitempty"`
@@ -272,6 +273,7 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		DNSFailures:               res.DNSFailures,
 		MalformedResponses:        res.MalformedResponses,
 		TotalLatencyQueries:       res.TotalQueries,
+		SkippedQueries:            res.Skipped,
 		SupportsDNSSEC:            res.SupportsDNSSEC,
 		HijacksNXDOMAIN:           res.HijacksNXDOMAIN,
 		BlocksRebinding:           res.BlocksRebinding,
@@ -374,7 +376,8 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 
 		warningPrefix := fmt.Sprintf("Warning (%s):", res.ServerAddress)
 		serverIssues := false
-		if res.Reliability < reliabilityThreshold {
+		attempted := res.TotalQueries - res.Skipped
+		if attempted > 0 && res.Reliability < reliabilityThreshold {
 			_, _ = fmt.Fprintf(writer, "%s Low reliability (%.1f%%).\n", warningPrefix, res.Reliability)
 			serverIssues = true
 		}
@@ -409,6 +412,16 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 }
 
 // --- Formatting Helpers ---
+
+// formatReliability formats the reliability percentage for console output.
+// A server with no attempted probes (e.g. interrupted before its turn) reads
+// "N/A" rather than a misleading 0.0%.
+func formatReliability(res *analysis.ServerResult) string {
+	if res.TotalQueries-res.Skipped <= 0 {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.1f%%", res.Reliability)
+}
 
 // formatLatency formats a latency duration for console output.
 // It returns "N/A" if there were no successful queries, or the latency in milliseconds with one decimal place.

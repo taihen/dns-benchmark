@@ -38,7 +38,8 @@ type ServerResult struct {
 	CachedLatencies    []time.Duration
 	UncachedLatencies  []time.Duration
 	Errors             int // Latency probes that failed before a structurally valid DNS response was received
-	TotalQueries       int // Total number of latency queries attempted
+	TotalQueries       int // Total number of latency queries scheduled
+	Skipped            int // Latency queries skipped due to cancellation (not attempted)
 	TimeoutErrors      int
 	TransportErrors    int
 	DNSFailures        int
@@ -77,7 +78,9 @@ func NewBenchmarkResults() *BenchmarkResults {
 func (sr *ServerResult) CalculateMetrics() {
 	// Calculate overall Reliability based on latency queries.
 	// sr.Errors is already accumulated by processLatencyResult; don't overwrite it.
-	totalLatencyQueriesAttempted := sr.TotalQueries
+	// Queries skipped due to cancellation were never attempted and must not
+	// count against the server.
+	totalLatencyQueriesAttempted := sr.TotalQueries - sr.Skipped
 	successfulLatencyQueries := len(sr.CachedLatencies) + len(sr.UncachedLatencies)
 	if totalLatencyQueriesAttempted > 0 {
 		sr.Reliability = (float64(successfulLatencyQueries) / float64(totalLatencyQueriesAttempted)) * 100.0
@@ -174,7 +177,8 @@ func computeScore(sr *ServerResult) float64 {
 	}
 	base := weightedSum / weightTotal
 
-	if sr.TotalQueries <= 0 {
+	attempted := sr.TotalQueries - sr.Skipped
+	if attempted <= 0 {
 		return math.Inf(1)
 	}
 	successful := len(sr.CachedLatencies) + len(sr.UncachedLatencies)
@@ -182,7 +186,7 @@ func computeScore(sr *ServerResult) float64 {
 	if usable < 0 {
 		usable = 0
 	}
-	effRel := float64(usable) / float64(sr.TotalQueries)
+	effRel := float64(usable) / float64(attempted)
 	if effRel <= 0 {
 		return math.Inf(1)
 	}

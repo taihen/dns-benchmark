@@ -63,6 +63,10 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
+- **Interactive Runs:**
+  - Live progress line on stderr when attached to a terminal.
+  - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score, shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
+  - Latency probes are interleaved across servers, so an interrupted run still has samples for every server.
 
 ## Building
 

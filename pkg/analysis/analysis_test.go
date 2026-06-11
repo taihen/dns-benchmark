@@ -178,6 +178,42 @@ func TestServerResult_CalculateMetrics(t *testing.T) {
 	}
 }
 
+func TestCalculateMetrics_SkippedQueriesExcluded(t *testing.T) {
+	// Queries skipped due to cancellation must not count against
+	// reliability or the composite score denominator.
+	sr := &ServerResult{
+		TotalQueries:      10,
+		Skipped:           6,
+		CachedLatencies:   []time.Duration{100 * time.Millisecond, 100 * time.Millisecond},
+		UncachedLatencies: []time.Duration{100 * time.Millisecond, 100 * time.Millisecond},
+	}
+	sr.CalculateMetrics()
+
+	if math.Abs(sr.Reliability-100.0) > 0.01 {
+		t.Errorf("Reliability = %v, want 100.0 (skipped queries must be excluded)", sr.Reliability)
+	}
+	// base = (0.50*100 + 0.25*100) / 0.75 = 100; effRel = 4/(10-6) = 1 -> 100
+	if math.Abs(sr.Score-100.0) > 0.01 {
+		t.Errorf("Score = %v, want 100.0 (skipped queries must be excluded)", sr.Score)
+	}
+}
+
+func TestCalculateMetrics_AllSkipped(t *testing.T) {
+	// A server whose every probe was skipped is unrankable, not 0% reliable.
+	sr := &ServerResult{
+		TotalQueries: 4,
+		Skipped:      4,
+	}
+	sr.CalculateMetrics()
+
+	if sr.Reliability != 0.0 {
+		t.Errorf("Reliability = %v, want 0.0", sr.Reliability)
+	}
+	if !math.IsInf(sr.Score, 1) {
+		t.Errorf("Score = %v, want +Inf (unrankable)", sr.Score)
+	}
+}
+
 func TestComputeScore(t *testing.T) {
 	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
