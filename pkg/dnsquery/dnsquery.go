@@ -141,7 +141,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 
 // getConnection retrieves or creates a QUIC connection for the server.
 // The returned bool indicates whether the session is pooled.
-func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Config) (*quic.Conn, bool, error) {
+func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -167,9 +167,9 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 	// No available connection, create a new one if under limit
 	if conns := p.connections[serverAddr]; len(conns) >= maxPooledConnections {
 		// Pool is full, create a temporary connection (not pooled)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		session, err := quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
+		session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
 		if err != nil {
 			return nil, false, err
 		}
@@ -177,10 +177,10 @@ func (p *quicConnectionPool) getConnection(serverAddr string, tlsConfig *tls.Con
 	}
 
 	// Create new connection
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	session, err := quic.DialAddrEarly(ctx, serverAddr, tlsConfig, nil)
+	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -238,13 +238,13 @@ func (p *quicConnectionPool) shutdownPool() {
 
 // performQueryWithClient performs a DNS query using a provided dns.Client.
 // It sets up the query message, including EDNS0 for DNSSEC, and handles the client exchange.
-func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
+func performQueryWithClient(ctx context.Context, client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true) // Opt-in to DNSSEC requests via EDNS0
 
 	startTime := time.Now()
-	response, _, err := client.Exchange(msg, serverAddr)
+	response, _, err := client.ExchangeContext(ctx, msg, serverAddr)
 	latency := time.Since(startTime)
 
 	if err != nil {
@@ -263,20 +263,20 @@ func performQueryWithClient(client *dns.Client, serverAddr, domain string, qType
 }
 
 // performUDPQuery performs a DNS query over UDP.
-func performUDPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+func performUDPQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	client := &dns.Client{Net: "udp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
-	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+	return performQueryWithClient(ctx, client, serverInfo.Address, domain, qType, timeout)
 }
 
 // performTCPQuery performs a DNS query over TCP.
-func performTCPQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+func performTCPQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	client := &dns.Client{Net: "tcp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
-	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+	return performQueryWithClient(ctx, client, serverInfo.Address, domain, qType, timeout)
 }
 
 // performDoTQuery performs a DNS query over TLS (DoT).
 // It configures TLS settings and uses the "tcp-tls" network.
-func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+func performDoTQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	tlsConfig := &tls.Config{
 		ServerName: serverInfo.Hostname, // for SNI
 		MinVersion: tls.VersionTLS12,
@@ -286,13 +286,13 @@ func performDoTQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		TLSConfig: tlsConfig,
 		Timeout:   timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout,
 	}
-	return performQueryWithClient(client, serverInfo.Address, domain, qType, timeout)
+	return performQueryWithClient(ctx, client, serverInfo.Address, domain, qType, timeout)
 }
 
 // performDoHQuery performs a DNS query over HTTPS (DoH).
 // It constructs an HTTP request with the DNS query message and sends it to the DoH server.
 // If httpClient is nil, a new client is created for this query.
-func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
+func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true)
@@ -306,7 +306,7 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 		httpClient = &http.Client{Timeout: timeout}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", serverInfo.Address, bytes.NewReader(packedMsg))
@@ -352,7 +352,7 @@ func performDoHQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 
 // performDoQQuery performs a DNS query over QUIC (DoQ).
 // It uses connection pooling to reuse QUIC sessions for better performance.
-func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
+func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true)
@@ -369,11 +369,11 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 	}
 
 	startTime := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// Get QUIC connection from pool
-	session, pooled, err := pool.getConnection(serverInfo.Address, tlsConfig)
+	session, pooled, err := pool.getConnection(ctx, serverInfo.Address, tlsConfig)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to get connection for %s: %w", serverInfo.Address, err)}
 	}
@@ -433,19 +433,19 @@ func performDoQQuery(serverInfo config.ServerInfo, domain string, qType uint16, 
 }
 
 // performQuery executes a DNS query with proper dependency injection for HTTP clients.
-func (b *Benchmarker) performQuery(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+func (b *Benchmarker) performQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	switch serverInfo.Protocol {
 	case config.UDP:
-		return performUDPQueryFunc(serverInfo, domain, qType, timeout)
+		return performUDPQueryFunc(ctx, serverInfo, domain, qType, timeout)
 	case config.TCP:
-		return performTCPQueryFunc(serverInfo, domain, qType, timeout)
+		return performTCPQueryFunc(ctx, serverInfo, domain, qType, timeout)
 	case config.DOT:
-		return performDoTQueryFunc(serverInfo, domain, qType, timeout)
+		return performDoTQueryFunc(ctx, serverInfo, domain, qType, timeout)
 	case config.DOH:
 		httpClient := b.dohClients[serverInfo.Address]
-		return performDoHQueryFunc(serverInfo, domain, qType, timeout, httpClient)
+		return performDoHQueryFunc(ctx, serverInfo, domain, qType, timeout, httpClient)
 	case config.DOQ:
-		return performDoQQueryFunc(serverInfo, domain, qType, timeout, b.quicPool)
+		return performDoQQueryFunc(ctx, serverInfo, domain, qType, timeout, b.quicPool)
 	default:
 		return QueryResult{Error: fmt.Errorf("unsupported protocol: %s", serverInfo.Protocol)}
 	}
@@ -466,15 +466,20 @@ type queryJobResult struct {
 	result     QueryResult
 	queryType  analysis.QueryType // For latency jobs
 	checkType  string             // For specific checks
+	skipped    bool               // Job not attempted (or aborted) due to cancellation
 }
 
 // Benchmarker manages the benchmarking process.
 type Benchmarker struct {
-	Config     *config.Config
-	Results    *analysis.BenchmarkResults
-	Limiter    *rate.Limiter
-	dohClients map[string]*http.Client // HTTP clients for DoH servers
-	quicPool   *quicConnectionPool
+	Config  *config.Config
+	Results *analysis.BenchmarkResults
+	Limiter *rate.Limiter
+	// ProgressWriter, when non-nil, receives an in-place progress line during
+	// Run (intended for an interactive stderr). Nil disables progress output.
+	ProgressWriter io.Writer
+	dohClients     map[string]*http.Client // HTTP clients for DoH servers
+	quicPool       *quicConnectionPool
+	progress       *progressTracker
 }
 
 // NewBenchmarker creates a new Benchmarker instance.
@@ -508,35 +513,70 @@ func (b *Benchmarker) Close() {
 	b.quicPool.shutdownPool()
 }
 
-// Run performs the benchmark against the configured servers.
-func (b *Benchmarker) Run() *analysis.BenchmarkResults {
+// Run performs the benchmark against the configured servers. Cancelling ctx
+// stops the benchmark early; results collected so far remain valid, with the
+// unattempted queries recorded as skipped.
+func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 	servers := b.Config.Servers
 
-	b.prewarmConnections(servers)
+	if b.ProgressWriter != nil {
+		_, _ = fmt.Fprint(b.ProgressWriter, "Warming up connections...")
+	}
+	b.prewarmConnections(ctx, servers)
 
 	// Initialize Results map
 	for _, server := range servers {
 		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String(), Protocol: server.Protocol.Label()}
 	}
 
+	if b.ProgressWriter != nil {
+		numCached, numUncached := calculateLatencyQueryCounts(b.Config.NumQueries)
+		totalJobs := len(servers)*(numCached+numUncached) + len(b.prepareCheckJobs(servers))
+		b.progress = newProgressTracker(b.ProgressWriter, int64(totalJobs))
+		defer b.progress.stop()
+	}
+
 	// Run Latency Benchmark
-	b.runLatencyBenchmark(servers)
+	b.runLatencyBenchmark(ctx, servers)
 
 	// Run Specific Checks Concurrently
-	b.runChecksConcurrently(servers)
+	b.runChecksConcurrently(ctx, servers)
 
 	return b.Results
 }
 
 // prewarmConnections makes a dummy query to each DoH, DoT, and TCP server to establish
 // connections before running the benchmark. This prevents connection setup overhead from
-// biasing the cached query results.
-func (b *Benchmarker) prewarmConnections(servers []config.ServerInfo) {
-	for _, server := range servers {
-		if server.Protocol == config.DOH || server.Protocol == config.DOT || server.Protocol == config.TCP || server.Protocol == config.DOQ {
-			_ = b.performQuery(server, "example.com", dns.TypeA, b.Config.Timeout)
-		}
+// biasing the cached query results. Connections are warmed concurrently (bounded by the
+// configured concurrency) so unreachable servers cost at most one timeout, not one each.
+func (b *Benchmarker) prewarmConnections(ctx context.Context, servers []config.ServerInfo) {
+	concurrency := b.Config.Concurrency
+	if concurrency <= 0 {
+		concurrency = 1
 	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for _, server := range servers {
+		if ctx.Err() != nil {
+			break
+		}
+		if server.Protocol != config.DOH && server.Protocol != config.DOT && server.Protocol != config.TCP && server.Protocol != config.DOQ {
+			continue
+		}
+		wg.Add(1)
+		go func(s config.ServerInfo) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			_ = b.performQuery(ctx, s, "example.com", dns.TypeA, b.Config.Timeout)
+		}(server)
+	}
+	wg.Wait()
 }
 
 // calculateLatencyQueryCounts determines the number of cached and uncached queries.
@@ -560,7 +600,7 @@ func calculateLatencyQueryCounts(totalQueries int) (numCached, numUncached int) 
 }
 
 // runLatencyBenchmark handles the cached/uncached latency tests.
-func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
+func (b *Benchmarker) runLatencyBenchmark(ctx context.Context, servers []config.ServerInfo) {
 	numCached, numUncached := calculateLatencyQueryCounts(b.Config.NumQueries)
 	totalLatencyJobsPerServer := numCached + numUncached
 	totalLatencyJobs := len(servers) * totalLatencyJobsPerServer
@@ -583,7 +623,7 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go b.queryWorker(&wg, jobs, resultsChan)
+		go b.queryWorker(ctx, &wg, jobs, resultsChan)
 	}
 
 	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
@@ -598,13 +638,18 @@ func (b *Benchmarker) runLatencyBenchmark(servers []config.ServerInfo) {
 		serverResult.TotalQueries = totalLatencyJobsPerServer
 		serverResult.CachedLatencies = make([]time.Duration, 0, numCached)
 		serverResult.UncachedLatencies = make([]time.Duration, 0, numUncached)
+	}
 
-		for i := 0; i < numCached; i++ {
-			jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
-		}
-		for i := 0; i < numUncached; i++ {
-			uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.")
-			jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
+	// Enqueue jobs round-robin across servers so an interrupted run still has
+	// samples for every server instead of exhausting the first server's queue.
+	for i := 0; i < totalLatencyJobsPerServer; i++ {
+		for _, server := range servers {
+			if i < numCached {
+				jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
+			} else {
+				uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.")
+				jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
+			}
 		}
 	}
 	close(jobs)
@@ -624,6 +669,12 @@ func (b *Benchmarker) processLatencyResult(res queryJobResult) {
 	serverResult, ok := b.Results.Results[serverKey]
 	if !ok {
 		return // Should not happen if initialized correctly
+	}
+
+	// Cancellation skips are not the server's fault; track separately.
+	if res.skipped {
+		serverResult.Skipped++
+		return
 	}
 
 	// Record latency for any valid DNS response, regardless of rcode.
@@ -691,7 +742,7 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 }
 
 // runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
-func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
+func (b *Benchmarker) runChecksConcurrently(ctx context.Context, servers []config.ServerInfo) {
 	checkJobsList := b.prepareCheckJobs(servers)
 	if len(checkJobsList) == 0 {
 		return // No checks enabled
@@ -712,7 +763,7 @@ func (b *Benchmarker) runChecksConcurrently(servers []config.ServerInfo) {
 	// Start check workers
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go b.queryWorker(&wg, jobs, resultsChan)
+		go b.queryWorker(ctx, &wg, jobs, resultsChan)
 	}
 
 	// Distribute check jobs
@@ -738,6 +789,11 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		return // Should not happen
 	}
 
+	// Skipped checks stay in their inconclusive (nil) state.
+	if res.skipped {
+		return
+	}
+
 	if res.result.Error != nil && b.Config.Verbose {
 		fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.ToUpper(res.checkType), serverKey, res.result.Error)
 	}
@@ -761,27 +817,51 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 }
 
 // queryWorker executes query jobs (used for both latency and checks).
-func (b *Benchmarker) queryWorker(wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
+// After ctx is cancelled, remaining jobs are drained and reported as skipped
+// so partial results stay valid.
+func (b *Benchmarker) queryWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan queryJob, results chan<- queryJobResult) {
 	defer wg.Done()
 	for job := range jobs {
-		if err := b.Limiter.Wait(context.Background()); err != nil {
-			results <- queryJobResult{
-				serverInfo: job.serverInfo,
-				result: QueryResult{
-					Error: fmt.Errorf("rate limiter wait failed: %w", err),
-				},
-				queryType: job.queryType,
-				checkType: job.checkType,
-			}
-			continue
+		results <- b.executeJob(ctx, job)
+		b.progress.increment()
+	}
+}
+
+// executeJob runs a single query job, mapping cancellation to a skipped result.
+func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResult {
+	skippedResult := queryJobResult{
+		serverInfo: job.serverInfo,
+		queryType:  job.queryType,
+		checkType:  job.checkType,
+		skipped:    true,
+	}
+
+	if ctx.Err() != nil {
+		return skippedResult
+	}
+	if err := b.Limiter.Wait(ctx); err != nil {
+		if ctx.Err() != nil {
+			return skippedResult
 		}
-		queryResult := b.performQuery(job.serverInfo, job.domain, job.qType, b.Config.Timeout)
-		results <- queryJobResult{
+		return queryJobResult{
 			serverInfo: job.serverInfo,
-			result:     queryResult,
-			queryType:  job.queryType,
-			checkType:  job.checkType,
+			result: QueryResult{
+				Error: fmt.Errorf("rate limiter wait failed: %w", err),
+			},
+			queryType: job.queryType,
+			checkType: job.checkType,
 		}
+	}
+	queryResult := b.performQuery(ctx, job.serverInfo, job.domain, job.qType, b.Config.Timeout)
+	if queryResult.Error != nil && ctx.Err() != nil {
+		// Query was aborted by cancellation, not by the server.
+		return skippedResult
+	}
+	return queryJobResult{
+		serverInfo: job.serverInfo,
+		result:     queryResult,
+		queryType:  job.queryType,
+		checkType:  job.checkType,
 	}
 }
 

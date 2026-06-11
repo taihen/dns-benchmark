@@ -1,6 +1,7 @@
 package dnsquery
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io" // Added io import
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync" // Added sync import
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -269,7 +271,7 @@ func TestPerformDoHQuery_Success(t *testing.T) {
 		DoHPath:  "",                                        // Path is part of the URL
 	}
 
-	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
+	result := performDoHQuery(context.Background(), serverInfo, domain, qType, timeout, nil)
 
 	require.NoError(t, result.Error)
 	require.NotNil(t, result.Response)
@@ -292,7 +294,7 @@ func TestPerformDoHQuery_Timeout(t *testing.T) {
 	defer server.Close()
 
 	serverInfo := config.ServerInfo{Address: server.URL, Protocol: config.DOH}
-	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
+	result := performDoHQuery(context.Background(), serverInfo, domain, qType, timeout, nil)
 
 	require.Error(t, result.Error)
 	assert.Contains(t, result.Error.Error(), "doh query timed out")
@@ -309,7 +311,7 @@ func TestPerformDoHQuery_BadStatus(t *testing.T) {
 	defer server.Close()
 
 	serverInfo := config.ServerInfo{Address: server.URL, Protocol: config.DOH}
-	result := performDoHQuery(serverInfo, domain, qType, timeout, nil)
+	result := performDoHQuery(context.Background(), serverInfo, domain, qType, timeout, nil)
 
 	require.Error(t, result.Error)
 	assert.Contains(t, result.Error.Error(), "doh query failed with status code 500")
@@ -466,13 +468,13 @@ func TestCheckResponseAccuracy(t *testing.T) {
 // --- Testing Benchmarker ---
 
 // Mock PerformQuery for Benchmarker tests - Improved version for concurrency
-func mockPerformQuery(cachedResults, uncachedResults map[string][]QueryResult) func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+func mockPerformQuery(cachedResults, uncachedResults map[string][]QueryResult) func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	var mu sync.Mutex
 	cachedCallCounts := make(map[string]int)
 	uncachedCallCounts := make(map[string]int)
 	cachedDomain := "cached.example.com" // Assume this is the domain used for cached tests in the config
 
-	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	return func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -501,7 +503,7 @@ func mockPerformQuery(cachedResults, uncachedResults map[string][]QueryResult) f
 }
 
 // mockAllProtocolFuncs sets up mocks for all protocol functions using the provided mock function
-func mockAllProtocolFuncs(mockFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult) (restore func()) {
+func mockAllProtocolFuncs(mockFunc func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult) (restore func()) {
 	originalUDP := performUDPQueryFunc
 	originalTCP := performTCPQueryFunc
 	originalDoT := performDoTQueryFunc
@@ -511,11 +513,11 @@ func mockAllProtocolFuncs(mockFunc func(serverInfo config.ServerInfo, domain str
 	performUDPQueryFunc = mockFunc
 	performTCPQueryFunc = mockFunc
 	performDoTQueryFunc = mockFunc
-	performDoHQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
-		return mockFunc(serverInfo, domain, qType, timeout)
+	performDoHQueryFunc = func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
+		return mockFunc(ctx, serverInfo, domain, qType, timeout)
 	}
-	performDoQQueryFunc = func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
-		return mockFunc(serverInfo, domain, qType, timeout)
+	performDoQQueryFunc = func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
+		return mockFunc(ctx, serverInfo, domain, qType, timeout)
 	}
 
 	return func() {
@@ -577,7 +579,7 @@ func TestBenchmarker_runLatencyBenchmark(t *testing.T) {
 	for _, server := range cfg.Servers {
 		benchmarker.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String()} // Ensure analysis is imported
 	}
-	benchmarker.runLatencyBenchmark(cfg.Servers) // Run the method under test
+	benchmarker.runLatencyBenchmark(context.Background(), cfg.Servers) // Run the method under test
 
 	// --- Assertions ---
 	results := benchmarker.Results.Results
@@ -689,7 +691,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	// --- Mocking ---
 	queryCallCounts := make(map[string]int) // Track calls per server
 	var mu sync.Mutex
-	mockFunc := func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		mu.Lock() // Lock at the beginning
 
 		key := serverInfo.String()
@@ -738,7 +740,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	for _, server := range cfg.Servers {
 		benchmarker.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String()}
 	}
-	benchmarker.runChecksConcurrently(cfg.Servers) // Run the method under test
+	benchmarker.runChecksConcurrently(context.Background(), cfg.Servers) // Run the method under test
 
 	// --- Assertions ---
 	results := benchmarker.Results.Results
@@ -843,7 +845,7 @@ func TestBenchmarker_Run(t *testing.T) {
 	// --- Mocking ---
 	queryCallCounts := make(map[string]int)
 	var mu sync.Mutex
-	mockFunc := func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		mu.Lock()
 		key := serverInfo.String()
 		count := queryCallCounts[key]
@@ -862,7 +864,7 @@ func TestBenchmarker_Run(t *testing.T) {
 
 	// --- Execution ---
 	benchmarker := NewBenchmarker(cfg)
-	finalResults := benchmarker.Run() // Run the main method
+	finalResults := benchmarker.Run(context.Background()) // Run the main method
 
 	// --- Assertions ---
 	require.NotNil(t, finalResults)
@@ -906,6 +908,218 @@ func TestBenchmarker_Run(t *testing.T) {
 	assert.False(t, *res2.IsAccurate, "Server 2 Accuracy")
 	assert.Nil(t, res2.DotcomLatency, "Server 2 Dotcom should be nil (check failed)")
 
+}
+
+// --- Cancellation behavior ---
+
+func TestBenchmarker_Run_PreCancelledContextSkipsAll(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	cfg := &config.Config{
+		Servers:     []config.ServerInfo{serverInfo},
+		NumQueries:  4,
+		Timeout:     time.Second,
+		Concurrency: 2,
+		RateLimit:   0,
+		QueryType:   "A",
+		Domain:      "cached.example.com",
+	}
+
+	var calls atomic.Int32
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		calls.Add(1)
+		return QueryResult{Latency: time.Millisecond, Response: nxdomainResponse()}
+	}
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before Run
+
+	benchmarker := NewBenchmarker(cfg)
+	defer benchmarker.Close()
+	results := benchmarker.Run(ctx)
+
+	res, ok := results.Results[serverInfo.String()]
+	require.True(t, ok, "results entry must exist even when cancelled")
+	assert.Equal(t, 4, res.TotalQueries, "TotalQueries")
+	assert.Equal(t, 4, res.Skipped, "all queries should be skipped")
+	assert.Equal(t, 0, res.Errors, "skipped queries must not count as errors")
+	assert.Empty(t, res.CachedLatencies)
+	assert.Empty(t, res.UncachedLatencies)
+	assert.Equal(t, int32(0), calls.Load(), "no queries should be attempted after cancellation")
+}
+
+func TestBenchmarker_Run_CancelMidRunKeepsPartialResults(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	cachedDomain := "cached.example.com"
+	cfg := &config.Config{
+		Servers:     []config.ServerInfo{serverInfo},
+		NumQueries:  4, // 2 cached + 2 uncached, queued cached-first
+		Timeout:     time.Second,
+		Concurrency: 1, // serial worker -> deterministic cancel point
+		RateLimit:   0,
+		QueryType:   "A",
+		Domain:      cachedDomain,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var calls atomic.Int32
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		n := calls.Add(1)
+		if n == 2 {
+			cancel() // user hits Ctrl+C during the second query
+		}
+		req := new(dns.Msg)
+		req.SetQuestion(dns.Fqdn(domain), qType)
+		rcode := dns.RcodeSuccess
+		if domain != cachedDomain {
+			rcode = dns.RcodeNameError
+		}
+		return QueryResult{Latency: 10 * time.Millisecond, Response: createTestResponse(req, rcode)}
+	}
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
+
+	benchmarker := NewBenchmarker(cfg)
+	defer benchmarker.Close()
+	results := benchmarker.Run(ctx)
+
+	res, ok := results.Results[serverInfo.String()]
+	require.True(t, ok)
+	assert.Equal(t, int32(2), calls.Load(), "only two queries should be attempted")
+	assert.Equal(t, 4, res.TotalQueries, "TotalQueries")
+	assert.Len(t, res.CachedLatencies, 2, "completed queries must be kept")
+	assert.Empty(t, res.UncachedLatencies)
+	assert.Equal(t, 2, res.Skipped, "remaining queries should be skipped")
+	assert.Equal(t, 0, res.Errors, "skipped queries must not count as errors")
+}
+
+func TestQueryWorker_CancelledInFlightQueryIsSkippedNotError(t *testing.T) {
+	serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	cfg := &config.Config{
+		Servers:     []config.ServerInfo{serverInfo},
+		NumQueries:  1,
+		Timeout:     time.Second,
+		Concurrency: 1,
+		RateLimit:   0,
+		QueryType:   "A",
+		Domain:      "cached.example.com",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Query is in flight when the context is cancelled and returns a
+	// cancellation error: must be recorded as skipped, not as a server fault.
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		cancel()
+		return QueryResult{Error: fmt.Errorf("query failed: %w", context.Canceled)}
+	}
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
+
+	benchmarker := NewBenchmarker(cfg)
+	defer benchmarker.Close()
+	results := benchmarker.Run(ctx)
+
+	res := results.Results[serverInfo.String()]
+	require.NotNil(t, res)
+	assert.Equal(t, 1, res.Skipped, "aborted in-flight query should be skipped")
+	assert.Equal(t, 0, res.Errors)
+	assert.Equal(t, 0, res.TransportErrors)
+}
+
+func TestRunLatencyBenchmark_InterleavesServersForFairPartialResults(t *testing.T) {
+	// Jobs must be queued round-robin across servers so an interrupted run
+	// has samples for every server, not just the first ones.
+	server1 := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+	server2 := config.ServerInfo{Address: "8.8.8.8:53", Protocol: config.UDP, Hostname: "8.8.8.8"}
+	cachedDomain := "cached.example.com"
+	cfg := &config.Config{
+		Servers:     []config.ServerInfo{server1, server2},
+		NumQueries:  2, // 1 cached + 1 uncached per server
+		Timeout:     time.Second,
+		Concurrency: 1,
+		RateLimit:   0,
+		QueryType:   "A",
+		Domain:      cachedDomain,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var calls atomic.Int32
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		if calls.Add(1) == 2 {
+			cancel() // interrupt after two of the four queries
+		}
+		req := new(dns.Msg)
+		req.SetQuestion(dns.Fqdn(domain), qType)
+		rcode := dns.RcodeSuccess
+		if domain != cachedDomain {
+			rcode = dns.RcodeNameError
+		}
+		return QueryResult{Latency: time.Millisecond, Response: createTestResponse(req, rcode)}
+	}
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
+
+	benchmarker := NewBenchmarker(cfg)
+	defer benchmarker.Close()
+	results := benchmarker.Run(ctx)
+
+	res1 := results.Results[server1.String()]
+	res2 := results.Results[server2.String()]
+	require.NotNil(t, res1)
+	require.NotNil(t, res2)
+	samples1 := len(res1.CachedLatencies) + len(res1.UncachedLatencies)
+	samples2 := len(res2.CachedLatencies) + len(res2.UncachedLatencies)
+	assert.Equal(t, 1, samples1, "server 1 should have exactly one sample after early interrupt")
+	assert.Equal(t, 1, samples2, "server 2 should have exactly one sample after early interrupt")
+}
+
+func TestPrewarmConnections_RunsConcurrentlyBoundedByConcurrency(t *testing.T) {
+	servers := []config.ServerInfo{
+		{Address: "1.1.1.1:853", Protocol: config.DOT, Hostname: "1.1.1.1"},
+		{Address: "8.8.8.8:853", Protocol: config.DOT, Hostname: "8.8.8.8"},
+		{Address: "9.9.9.9:853", Protocol: config.DOT, Hostname: "9.9.9.9"},
+		{Address: "94.140.14.14:853", Protocol: config.DOT, Hostname: "94.140.14.14"},
+	}
+	cfg := &config.Config{
+		Servers:     servers,
+		Concurrency: 2,
+		RateLimit:   0,
+		Timeout:     time.Second,
+	}
+
+	var concurrent, maxConcurrent atomic.Int32
+	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		cur := concurrent.Add(1)
+		for {
+			old := maxConcurrent.Load()
+			if cur <= old || maxConcurrent.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		concurrent.Add(-1)
+		return QueryResult{Latency: time.Millisecond, Response: &dns.Msg{}}
+	}
+	restore := mockAllProtocolFuncs(mockFunc)
+	defer restore()
+
+	benchmarker := NewBenchmarker(cfg)
+	defer benchmarker.Close()
+
+	start := time.Now()
+	benchmarker.prewarmConnections(context.Background(), servers)
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, maxConcurrent.Load(), int32(2), "prewarm should overlap connection setup")
+	assert.LessOrEqual(t, maxConcurrent.Load(), int32(2), "prewarm must respect the concurrency limit")
+	assert.Less(t, elapsed, 350*time.Millisecond, "prewarm should not run serially (serial would take ~400ms)")
 }
 
 // --- Regression tests: NXDOMAIN must count as success for latency/dotcom ---
@@ -1025,13 +1239,13 @@ func TestProcessCheckResult_DotcomNXDOMAIN(t *testing.T) {
 // --- Testing PerformQuery Dispatcher ---
 
 // Mock function signature
-type mockQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult
-type mockDoHQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult
-type mockDoQQueryFunc func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult
+type mockQueryFunc func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult
+type mockDoHQueryFunc func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult
+type mockDoQQueryFunc func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult
 
 // Helper to create a mock function that records it was called
 func createMockQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockQueryFunc {
-	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+	return func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		*protocolCalled = expectedProtocol // Record which mock was called
 		// Return a dummy result
 		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
@@ -1040,14 +1254,14 @@ func createMockQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol c
 
 // Helper to create a mock DoH function with the httpClient parameter
 func createMockDoHQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockDoHQueryFunc {
-	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
+	return func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, httpClient *http.Client) QueryResult {
 		*protocolCalled = expectedProtocol
 		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
 	}
 }
 
 func createMockDoQQueryFunc(protocolCalled *config.ProtocolType, expectedProtocol config.ProtocolType) mockDoQQueryFunc {
-	return func(serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
+	return func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
 		*protocolCalled = expectedProtocol
 		return QueryResult{Error: fmt.Errorf("mock %s called", expectedProtocol)}
 	}
@@ -1101,7 +1315,7 @@ func TestBenchmarker_performQuery_Dispatcher(t *testing.T) {
 			benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: timeout})
 			defer benchmarker.Close()
 
-			result := benchmarker.performQuery(tt.serverInfo, domain, qType, timeout)
+			result := benchmarker.performQuery(context.Background(), tt.serverInfo, domain, qType, timeout)
 
 			if tt.expectedProtocol == config.ProtocolType("invalid") {
 				require.Error(t, result.Error)
