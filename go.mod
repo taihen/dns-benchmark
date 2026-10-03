@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/miekg/dns v1.1.73
-	github.com/quic-go/quic-go v0.62.0
+	github.com/quic-go/quic-go v0.63.0
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/time v0.16.0
 )
