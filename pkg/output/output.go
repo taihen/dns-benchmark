@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/taihen/dns-benchmark/pkg/analysis"
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
@@ -25,6 +26,9 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 
 	w := tabwriter.NewWriter(writer, 0, 0, 2, ' ', 0)
 
+	if version := catalogVersion(results); version != "" {
+		_, _ = fmt.Fprintf(writer, "Catalogue: %s; corpus: %s\n", version, results.Metadata.CorpusID)
+	}
 	header := buildHeader(cfg)
 	_, _ = fmt.Fprintln(w, strings.Join(header, "\t"))
 	_, _ = fmt.Fprintln(w, strings.Repeat("-\t", len(header)))
@@ -47,7 +51,6 @@ func WriteCSVResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *
 	sortServerResults(serverResults)
 
 	csvWriter := csv.NewWriter(writer)
-	defer csvWriter.Flush()
 
 	header := buildCSVHeader(cfg)
 	if err := csvWriter.Write(header); err != nil {
@@ -57,9 +60,10 @@ func WriteCSVResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *
 	for _, res := range serverResults {
 		row := buildCSVRow(res, cfg)
 		if err := csvWriter.Write(row); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to write CSV row for server %s: %v\n", res.ServerAddress, err)
+			return fmt.Errorf("write CSV row for %s: %w", res.ServerAddress, err)
 		}
 	}
+	csvWriter.Flush()
 	return csvWriter.Error()
 }
 
@@ -75,7 +79,7 @@ func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg 
 
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ") // Pretty print
-	if err := encoder.Encode(outputResults); err != nil {
+	if err := encoder.Encode(JSONReport{SchemaVersion: "2", Metadata: results.Metadata, Results: outputResults}); err != nil {
 		return fmt.Errorf("failed to encode JSON results: %w", err)
 	}
 	return nil
@@ -98,6 +102,9 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 // deterministic output.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
+		if gi, gj := results[i].ComparisonGroup(), results[j].ComparisonGroup(); gi != gj {
+			return gi < gj
+		}
 		si, sj := results[i].Score, results[j].Score
 		if si != sj {
 			return si < sj
@@ -110,6 +117,9 @@ func sortServerResults(results []*analysis.ServerResult) {
 // It includes columns for server address, latency metrics, reliability, and optional checks.
 func buildHeader(cfg *config.Config) []string {
 	header := []string{"DNS Server", "Protocol", "Avg Cached", "StdDev Cached", "Avg Uncached", "StdDev Uncached", "Score", "Reliability"}
+	if cfg.CheckFiltering {
+		header = append(header, "Filtering")
+	}
 	if cfg.CheckDotcom {
 		header = append(header, ".com Latency")
 	}
@@ -125,7 +135,7 @@ func buildHeader(cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		header = append(header, "Accuracy")
 	}
-	return header
+	return append(header, "Provider", "Profile", "Roles", "IPFamily", "TLSServerName", "FilteringPolicy", "Truncated")
 }
 
 // buildRow constructs a data row for console output for a single server result.
@@ -140,6 +150,9 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatStdDev(res.StdDevUncachedLatency, len(res.UncachedLatencies) > 1),
 		formatScore(res.Score),
 		formatReliability(res),
+	}
+	if cfg.CheckFiltering {
+		row = append(row, string(res.Checks["filtering"]))
 	}
 	if cfg.CheckDotcom {
 		row = append(row, formatDurationPointer(res.DotcomLatency))
@@ -156,7 +169,7 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		row = append(row, formatBoolPointer(res.IsAccurate, "Accurate", "Mismatch", "N/A"))
 	}
-	return row
+	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.IPFamily, res.TLSServerName, res.FilteringPolicy, strconv.Itoa(res.TruncatedResponses))
 }
 
 // buildCSVHeader constructs the header row for CSV output.
@@ -187,7 +200,7 @@ func buildCSVHeader(cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		header = append(header, "IsAccurate")
 	}
-	return header
+	return append(header, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "SkippedQueries")
 }
 
 // buildCSVRow constructs a data row for CSV output for a single server result.
@@ -226,41 +239,49 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		row = append(row, formatBoolPointerCSV(res.IsAccurate))
 	}
-	return row
+	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.EndpointID, res.IPFamily, res.Transport, res.TLSServerName, res.CatalogVersion, res.FilteringPolicy, res.ComparisonGroup(), strconv.Itoa(res.TruncatedResponses), strconv.Itoa(res.PolicyResponses), string(res.Checks["dnssec"]), string(res.Checks["nxdomain"]), string(res.Checks["rebinding"]), string(res.Checks["accuracy"]), string(res.Checks["filtering"]), strconv.Itoa(res.Skipped))
 }
 
 // JSONServerResult defines the structure for JSON output.
 // It specifies how ServerResult data is serialized into JSON format.
 type JSONServerResult struct {
-	ServerAddress             string   `json:"serverAddress"`
-	Protocol                  string   `json:"protocol"`
-	AvgCachedLatencyMs        *float64 `json:"avgCachedLatencyMs,omitempty"`
-	StdDevCachedLatencyMs     *float64 `json:"stdDevCachedLatencyMs,omitempty"`
-	AvgUncachedLatencyMs      *float64 `json:"avgUncachedLatencyMs,omitempty"`
-	StdDevUncachedLatencyMs   *float64 `json:"stdDevUncachedLatencyMs,omitempty"`
-	DotcomLatencyMs           *float64 `json:"dotcomLatencyMs,omitempty"`
-	ReliabilityPct            float64  `json:"reliabilityPct"`
-	Score                     *float64 `json:"score"`
-	SuccessfulCachedQueries   int      `json:"successfulCachedQueries"`
-	SuccessfulUncachedQueries int      `json:"successfulUncachedQueries"`
-	FailedLatencyQueries      int      `json:"failedLatencyQueries"`
-	Errors                    int      `json:"errors"` // Deprecated alias for compatibility
-	TimeoutErrors             int      `json:"timeoutErrors"`
-	TransportErrors           int      `json:"transportErrors"`
-	DNSFailures               int      `json:"dnsFailures"`
-	MalformedResponses        int      `json:"malformedResponses"`
-	TotalLatencyQueries       int      `json:"totalLatencyQueries"`
-	SkippedQueries            int      `json:"skippedQueries,omitempty"` // Queries not attempted due to interruption
-	SupportsDNSSEC            *bool    `json:"supportsDnssec,omitempty"`
-	HijacksNXDOMAIN           *bool    `json:"hijacksNxdomain,omitempty"`
-	BlocksRebinding           *bool    `json:"blocksRebinding,omitempty"`
-	IsAccurate                *bool    `json:"isAccurate,omitempty"`
+	ExtendedDNSErrors []uint16 `json:"extendedDnsErrors"`
+	PolicyResponses   int      `json:"policyResponses"`
+	catalog.Metadata
+	ComparisonGroup           string                         `json:"comparisonGroup"`
+	Checks                    map[string]analysis.CheckState `json:"checks"`
+	TruncatedResponses        int                            `json:"truncatedResponses"`
+	ServerAddress             string                         `json:"serverAddress"`
+	Protocol                  string                         `json:"protocol"`
+	AvgCachedLatencyMs        *float64                       `json:"avgCachedLatencyMs,omitempty"`
+	StdDevCachedLatencyMs     *float64                       `json:"stdDevCachedLatencyMs,omitempty"`
+	AvgUncachedLatencyMs      *float64                       `json:"avgUncachedLatencyMs,omitempty"`
+	StdDevUncachedLatencyMs   *float64                       `json:"stdDevUncachedLatencyMs,omitempty"`
+	DotcomLatencyMs           *float64                       `json:"dotcomLatencyMs,omitempty"`
+	ReliabilityPct            float64                        `json:"reliabilityPct"`
+	Score                     *float64                       `json:"score"`
+	SuccessfulCachedQueries   int                            `json:"successfulCachedQueries"`
+	SuccessfulUncachedQueries int                            `json:"successfulUncachedQueries"`
+	FailedLatencyQueries      int                            `json:"failedLatencyQueries"`
+	Errors                    int                            `json:"errors"` // Deprecated alias for compatibility
+	TimeoutErrors             int                            `json:"timeoutErrors"`
+	TransportErrors           int                            `json:"transportErrors"`
+	DNSFailures               int                            `json:"dnsFailures"`
+	MalformedResponses        int                            `json:"malformedResponses"`
+	TotalLatencyQueries       int                            `json:"totalLatencyQueries"`
+	SkippedQueries            int                            `json:"skippedQueries,omitempty"` // Queries not attempted due to interruption
+	SupportsDNSSEC            *bool                          `json:"supportsDnssec,omitempty"`
+	HijacksNXDOMAIN           *bool                          `json:"hijacksNxdomain,omitempty"`
+	BlocksRebinding           *bool                          `json:"blocksRebinding,omitempty"`
+	IsAccurate                *bool                          `json:"isAccurate,omitempty"`
 }
 
 // buildJSONResult transforms a ServerResult into a JSONServerResult.
 // It prepares the data for JSON output, converting relevant fields to the JSONServerResult structure.
 func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerResult {
 	jsonRes := JSONServerResult{
+		ExtendedDNSErrors: res.ExtendedDNSErrors, PolicyResponses: res.PolicyResponses,
+		Metadata: res.Metadata, ComparisonGroup: res.ComparisonGroup(), Checks: res.Checks, TruncatedResponses: res.TruncatedResponses,
 		ServerAddress:             res.ServerAddress,
 		Protocol:                  res.Protocol,
 		ReliabilityPct:            res.Reliability,
@@ -307,7 +328,7 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 }
 
 // printSummary adds a concluding recommendation based on the results.
-func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
+func printSingleGroupSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
 	if len(results) == 0 {
 		return
 	}
@@ -507,4 +528,45 @@ func formatBoolPointerCSV(val *bool) string {
 		return "N/A"
 	}
 	return strconv.FormatBool(*val)
+}
+
+// JSONReport is the version 2 JSON envelope, including workload metadata.
+type JSONReport struct {
+	SchemaVersion string               `json:"schemaVersion"`
+	Metadata      analysis.RunMetadata `json:"metadata"`
+	Results       []JSONServerResult   `json:"results"`
+}
+
+func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
+	groups := map[string][]*analysis.ServerResult{}
+	for _, res := range results {
+		groups[res.ComparisonGroup()] = append(groups[res.ComparisonGroup()], res)
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		group := groups[key]
+		// Old callers without profile metadata retain their existing summary.
+		if group[0].Profile == "" {
+			printSingleGroupSummary(writer, group, cfg)
+			continue
+		}
+		best := findBestServer(group, cfg)
+		if best != nil {
+			_, _ = fmt.Fprintf(writer, "Fastest %s: %s (%s), %s, score %s\n", key, best.Provider, best.Profile, best.ServerAddress, formatScore(best.Score))
+		}
+		printServerWarnings(writer, group, best, cfg)
+	}
+}
+
+func catalogVersion(results *analysis.BenchmarkResults) string {
+	for _, r := range results.Results {
+		if r.CatalogVersion != "" {
+			return r.CatalogVersion
+		}
+	}
+	return ""
 }

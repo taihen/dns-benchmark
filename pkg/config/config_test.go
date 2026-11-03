@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"io"
 	"net"
 	"os"
@@ -288,31 +289,31 @@ func TestParseServerString(t *testing.T) {
 			"invalid prefix",
 			"invalid://1.1.1.1",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
-			false,
+			true,
 		}, // Expect UDP fallback
 		{
 			"udp with bad port",
 			"1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
-			false,
+			true,
 		}, // Expect salvaged host, default port
 		{
 			"tcp with bad port",
 			"tcp://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"},
-			false,
+			true,
 		}, // Expect salvaged host, default port
 		{
 			"dot with bad port",
 			"tls://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"},
-			false,
+			true,
 		}, // Expect salvaged host, default port
 		{
 			"doq with bad port",
 			"quic://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:853", Protocol: DOQ, Hostname: "1.1.1.1"},
-			false,
+			true,
 		}, // Expect salvaged host, default port
 		{
 			"invalid hostname",
@@ -332,6 +333,9 @@ func TestParseServerString(t *testing.T) {
 			got, err := parseServerString(tt.serverStr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseServerString() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
@@ -551,6 +555,9 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 			// Sort both slices for consistent comparison as order isn't guaranteed
 			sortServerInfos(got)
 			sortServerInfos(tt.want)
+			for i := range got {
+				got[i].Metadata = catalog.Metadata{}
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseAndDeduplicateServers() got = %v, want %v", got, tt.want)
 			}
@@ -902,10 +909,10 @@ func TestIsValidHostname(t *testing.T) {
 }
 
 func TestPrintVerboseConfig(t *testing.T) {
-	// Capture stdout to verify output
-	oldStdout := os.Stdout
+	// Capture stderr to verify output
+	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stderr = w
 
 	cfg := &Config{
 		ServersFile:         "servers.txt",
@@ -930,9 +937,9 @@ func TestPrintVerboseConfig(t *testing.T) {
 
 	printVerboseConfig(cfg)
 
-	// Close writer and restore stdout
+	// Close writer and restore stderr
 	_ = w.Close()
-	os.Stdout = oldStdout
+	os.Stderr = oldStderr
 
 	// Read captured output
 	var outBuf []byte
@@ -958,10 +965,10 @@ func TestPrintVerboseConfig(t *testing.T) {
 }
 
 func TestPrintVerboseConfigNoAccuracy(t *testing.T) {
-	// Capture stdout to verify output
-	oldStdout := os.Stdout
+	// Capture stderr to verify output
+	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stderr = w
 
 	cfg := &Config{
 		Servers:           []ServerInfo{{Address: "1.1.1.1:53", Protocol: UDP}},
@@ -977,9 +984,9 @@ func TestPrintVerboseConfigNoAccuracy(t *testing.T) {
 
 	printVerboseConfig(cfg)
 
-	// Close writer and restore stdout
+	// Close writer and restore stderr
 	_ = w.Close()
-	os.Stdout = oldStdout
+	os.Stderr = oldStderr
 
 	// Read captured output
 	var outBuf []byte

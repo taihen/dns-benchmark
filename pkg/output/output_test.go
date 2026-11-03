@@ -383,6 +383,7 @@ func TestWriteCSVResults(t *testing.T) {
 		"DotcomLatency(ms)",
 		"SupportsDNSSEC", "HijacksNXDOMAIN", "BlocksRebinding", "IsAccurate",
 	}
+	expectedHeader = append(expectedHeader, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "SkippedQueries")
 	assert.Equal(t, expectedHeader, records[0])
 
 	// Check Data Rows (order is sorted: 1.1.1.1, 8.8.8.8, 9.9.9.9)
@@ -470,10 +471,13 @@ func TestWriteJSONResults(t *testing.T) {
 	err := WriteJSONResults(&buf, results, cfg)
 	require.NoError(t, err)
 
+	var report JSONReport
 	var jsonOutput []JSONServerResult
-	err = json.Unmarshal(buf.Bytes(), &jsonOutput)
+	err = json.Unmarshal(buf.Bytes(), &report)
 	require.NoError(t, err)
 
+	jsonOutput = report.Results
+	assert.Equal(t, "2", report.SchemaVersion)
 	require.Len(t, jsonOutput, 3)
 
 	// Check order (sorted)

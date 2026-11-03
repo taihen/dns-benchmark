@@ -38,8 +38,8 @@ func run() int {
 	defer stop()
 
 	// Create and run the benchmarker
-	fmt.Printf("DNS Benchmark %s\n", version)
-	fmt.Println("Running benchmark... (Ctrl+C to stop early and keep partial results)")
+	fmt.Fprintf(os.Stderr, "DNS Benchmark %s\n", version)
+	fmt.Fprintln(os.Stderr, "Running benchmark... (Ctrl+C to stop early and keep partial results)")
 	benchmarker := dnsquery.NewBenchmarker(cfg)
 	defer benchmarker.Close()
 	if isTerminal(os.Stderr) {
@@ -51,8 +51,8 @@ func run() int {
 	if interrupted {
 		fmt.Fprintln(os.Stderr, "Interrupted - reporting partial results.")
 	}
-	fmt.Println("Benchmark finished.")
-	fmt.Println("---")
+	fmt.Fprintln(os.Stderr, "Benchmark finished.")
+	fmt.Fprintln(os.Stderr, "---")
 
 	// Analyze the results (calculate derived metrics like averages, stddev, reliability)
 	results.Analyze()

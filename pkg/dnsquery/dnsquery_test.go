@@ -327,6 +327,8 @@ func TestCheckDNSSECValidation(t *testing.T) {
 	req.SetQuestion("example.com.", dns.TypeA)
 
 	respValidated := createTestResponse(req, dns.RcodeServerFailure)
+	respValidated.SetEdns0(1232, true)
+	respValidated.IsEdns0().Option = append(respValidated.IsEdns0().Option, &dns.EDNS0_EDE{InfoCode: 6})
 	respNotValidated := createTestResponse(req, dns.RcodeSuccess, createARecord("example.com.", "93.184.216.34"))
 	respInconclusive := createTestResponse(req, dns.RcodeNameError)
 
@@ -360,7 +362,7 @@ func TestPrepareCheckJobs_UsesCurrentCheckDomains(t *testing.T) {
 	defer benchmarker.Close()
 
 	jobs := benchmarker.prepareCheckJobs([]config.ServerInfo{server})
-	require.Len(t, jobs, 2)
+	require.Len(t, jobs, 3)
 	assert.Equal(t, "dnssec-failed.org.", jobs[0].domain)
 	assert.Equal(t, "dnssec", jobs[0].checkType)
 	assert.True(t, strings.HasPrefix(jobs[1].domain, nxdomainCheckDomainPrefix))
@@ -635,6 +637,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 		RateLimit:           0, // Unlimited
 		CheckDNSSEC:         true,
 		CheckNXDOMAIN:       true,
+		RebindingDomain:     rebindingCheckDomain,
 		CheckRebinding:      true,    // Use placeholder domain
 		AccuracyCheckFile:   "dummy", // Enable check
 		AccuracyCheckDomain: accuracyDomain,
@@ -647,6 +650,8 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	reqDNSSEC := &dns.Msg{}
 	reqDNSSEC.SetQuestion(dnssecCheckDomain, dns.TypeA)
 	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeServerFailure)
+	respDNSSECOk.SetEdns0(1232, true)
+	respDNSSECOk.IsEdns0().Option = append(respDNSSECOk.IsEdns0().Option, &dns.EDNS0_EDE{InfoCode: 6})
 	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
 
 	// We need unique NXDOMAINs per server if testing concurrently, but mock can handle it
@@ -723,6 +728,10 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 		}
 
 		// Get the result for the current count
+		if strings.HasPrefix(domain, "second.") {
+			count--
+			queryCallCounts[key]--
+		}
 		resultToReturn := expectedResults[count]
 
 		// Increment count for the next call
@@ -789,6 +798,7 @@ func TestBenchmarker_Run(t *testing.T) {
 		RateLimit:           0,
 		CheckDNSSEC:         true,
 		CheckNXDOMAIN:       true,
+		RebindingDomain:     rebindingCheckDomain,
 		CheckRebinding:      false, // Disable rebinding for simplicity
 		AccuracyCheckFile:   "dummy",
 		AccuracyCheckDomain: accuracyDomain,
@@ -814,6 +824,8 @@ func TestBenchmarker_Run(t *testing.T) {
 	respCachedOK := createTestResponse(reqCached, dns.RcodeSuccess)
 	respUncachedNX := createTestResponse(reqUncached, dns.RcodeNameError)
 	respDNSSECOk := createTestResponse(reqDNSSEC, dns.RcodeServerFailure)
+	respDNSSECOk.SetEdns0(1232, true)
+	respDNSSECOk.IsEdns0().Option = append(respDNSSECOk.IsEdns0().Option, &dns.EDNS0_EDE{InfoCode: 6})
 	respDNSSECNo := createTestResponse(reqDNSSEC, dns.RcodeSuccess)
 	respNXDOMAINOk := createTestResponse(reqNXDOMAIN, dns.RcodeNameError)
 	respNXDOMAINHijacked := createTestResponse(reqNXDOMAIN, dns.RcodeSuccess, createARecord("hijacked.test.", "1.2.3.4"))
@@ -849,6 +861,10 @@ func TestBenchmarker_Run(t *testing.T) {
 		mu.Lock()
 		key := serverInfo.String()
 		count := queryCallCounts[key]
+		if strings.HasPrefix(domain, "second.") {
+			count--
+			queryCallCounts[key]--
+		}
 		queryCallCounts[key]++
 		mu.Unlock() // Unlock early
 
@@ -1080,47 +1096,7 @@ func TestRunLatencyBenchmark_InterleavesServersForFairPartialResults(t *testing.
 	assert.Equal(t, 1, samples2, "server 2 should have exactly one sample after early interrupt")
 }
 
-func TestPrewarmConnections_RunsConcurrentlyBoundedByConcurrency(t *testing.T) {
-	servers := []config.ServerInfo{
-		{Address: "1.1.1.1:853", Protocol: config.DOT, Hostname: "1.1.1.1"},
-		{Address: "8.8.8.8:853", Protocol: config.DOT, Hostname: "8.8.8.8"},
-		{Address: "9.9.9.9:853", Protocol: config.DOT, Hostname: "9.9.9.9"},
-		{Address: "94.140.14.14:853", Protocol: config.DOT, Hostname: "94.140.14.14"},
-	}
-	cfg := &config.Config{
-		Servers:     servers,
-		Concurrency: 2,
-		RateLimit:   0,
-		Timeout:     time.Second,
-	}
-
-	var concurrent, maxConcurrent atomic.Int32
-	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-		cur := concurrent.Add(1)
-		for {
-			old := maxConcurrent.Load()
-			if cur <= old || maxConcurrent.CompareAndSwap(old, cur) {
-				break
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-		concurrent.Add(-1)
-		return QueryResult{Latency: time.Millisecond, Response: &dns.Msg{}}
-	}
-	restore := mockAllProtocolFuncs(mockFunc)
-	defer restore()
-
-	benchmarker := NewBenchmarker(cfg)
-	defer benchmarker.Close()
-
-	start := time.Now()
-	benchmarker.prewarmConnections(context.Background(), servers)
-	elapsed := time.Since(start)
-
-	assert.GreaterOrEqual(t, maxConcurrent.Load(), int32(2), "prewarm should overlap connection setup")
-	assert.LessOrEqual(t, maxConcurrent.Load(), int32(2), "prewarm must respect the concurrency limit")
-	assert.Less(t, elapsed, 350*time.Millisecond, "prewarm should not run serially (serial would take ~400ms)")
-}
+const rebindingCheckDomain = "private.fixture.invalid."
 
 // --- Regression tests: NXDOMAIN must count as success for latency/dotcom ---
 

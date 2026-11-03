@@ -2,7 +2,10 @@ package analysis
 
 import (
 	"math"
+	"strings"
 	"time"
+
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
 // QueryType indicates the type of benchmark query (cached or uncached).
@@ -33,17 +36,26 @@ const (
 
 // Holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
-	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
-	Protocol           string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
-	CachedLatencies    []time.Duration
-	UncachedLatencies  []time.Duration
-	Errors             int // Latency probes that failed before a structurally valid DNS response was received
-	TotalQueries       int // Total number of latency queries scheduled
-	Skipped            int // Latency queries skipped due to cancellation (not attempted)
-	TimeoutErrors      int
-	TransportErrors    int
-	DNSFailures        int
-	MalformedResponses int
+	catalog.Metadata
+	Checks               map[string]CheckState
+	TruncatedResponses   int
+	NXDOMAINProbes       int
+	NXDOMAINInconclusive bool
+	FilteringProbes      int
+	FilteringStates      []CheckState
+	ExtendedDNSErrors    []uint16
+	PolicyResponses      int
+	ServerAddress        string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	Protocol             string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
+	CachedLatencies      []time.Duration
+	UncachedLatencies    []time.Duration
+	Errors               int // Latency probes without a complete, structurally valid response
+	TotalQueries         int // Total number of latency queries scheduled
+	Skipped              int // Latency queries skipped due to cancellation (not attempted)
+	TimeoutErrors        int
+	TransportErrors      int
+	DNSFailures          int
+	MalformedResponses   int
 
 	// Check Results (pointers allow nil state for unchecked/error)
 	SupportsDNSSEC  *bool
@@ -63,8 +75,9 @@ type ServerResult struct {
 
 // BenchmarkResults holds the results for all tested servers.
 type BenchmarkResults struct {
-	Results map[string]*ServerResult // Map key is ServerResult.ServerAddress
-	// TODO: Add overall benchmark metadata (e.g., start/end time, total errors across all types).
+	Metadata RunMetadata              `json:"metadata"`
+	Results  map[string]*ServerResult // Map key is ServerResult.ServerAddress
+
 }
 
 // NewBenchmarkResults creates an initialized BenchmarkResults map.
@@ -198,4 +211,43 @@ func (br *BenchmarkResults) Analyze() {
 	for _, serverResult := range br.Results {
 		serverResult.CalculateMetrics()
 	}
+}
+
+// CheckState distinguishes a failed probe from missing evidence.
+type CheckState string
+
+const (
+	Pass          CheckState = "pass"
+	Fail          CheckState = "fail"
+	Inconclusive  CheckState = "inconclusive"
+	NotApplicable CheckState = "not_applicable"
+)
+
+// StateFromBool translates compatibility fields into explicit check states.
+func StateFromBool(value *bool, invert bool) CheckState {
+	if value == nil {
+		return Inconclusive
+	}
+	if *value != invert {
+		return Pass
+	}
+	return Fail
+}
+
+// RunMetadata describes the workload and completion state of a benchmark.
+type RunMetadata struct {
+	StartedAt        time.Time `json:"timestamp"`
+	CorpusID         string    `json:"queryCorpusId"`
+	RequestedQueries int       `json:"requestedQueryCount"`
+	Skipped          int       `json:"skippedCount"`
+	Interrupted      bool      `json:"interrupted"`
+}
+
+// ComparisonGroup limits ranking to matching policy, transport and IP family.
+// Provider and profile remain attached to every individual measurement.
+func (sr *ServerResult) ComparisonGroup() string {
+	if sr.Profile == "" {
+		return ""
+	}
+	return strings.Join([]string{sr.FilteringPolicy, strings.Join(sr.Roles, "+"), sr.ECS, sr.Protocol, sr.IPFamily}, " / ")
 }
