@@ -102,7 +102,7 @@ func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg 
 
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ") // Pretty print
-	if err := encoder.Encode(JSONReport{SchemaVersion: "2", Metadata: results.Metadata, Results: outputResults}); err != nil {
+	if err := encoder.Encode(JSONReport{SchemaVersion: JSONSchemaVersion, Metadata: results.Metadata, Results: outputResults}); err != nil {
 		return fmt.Errorf("failed to encode JSON results: %w", err)
 	}
 	return nil
@@ -236,7 +236,7 @@ func buildCSVHeader(cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		header = append(header, "IsAccurate")
 	}
-	return append(header, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "SkippedQueries")
+	return append(header, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "DotcomState", "SkippedQueries")
 }
 
 // buildCSVRow constructs a data row for CSV output for a single server result.
@@ -275,7 +275,7 @@ func buildCSVRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	if cfg.AccuracyCheckFile != "" {
 		row = append(row, formatBoolPointerCSV(res.IsAccurate))
 	}
-	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.EndpointID, res.IPFamily, res.Transport, res.TLSServerName, res.CatalogVersion, res.FilteringPolicy, res.ComparisonGroup(), strconv.Itoa(res.TruncatedResponses), strconv.Itoa(res.PolicyResponses), string(res.Checks["dnssec"]), string(res.Checks["nxdomain"]), string(res.Checks["rebinding"]), string(res.Checks["accuracy"]), string(res.Checks["filtering"]), strconv.Itoa(res.Skipped))
+	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.EndpointID, res.IPFamily, res.Transport, res.TLSServerName, res.CatalogVersion, res.FilteringPolicy, res.ComparisonGroup(), strconv.Itoa(res.TruncatedResponses), strconv.Itoa(res.PolicyResponses), string(res.Checks["dnssec"]), string(res.Checks["nxdomain"]), string(res.Checks["rebinding"]), string(res.Checks["accuracy"]), string(res.Checks["filtering"]), string(res.Checks["dotcom"]), strconv.Itoa(res.Skipped))
 }
 
 // JSONServerResult defines the structure for JSON output.
@@ -336,6 +336,13 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		BlocksRebinding:           res.BlocksRebinding,
 		IsAccurate:                res.IsAccurate,
 	}
+	// Arrays and the checks object are never null in schema v2.
+	jsonRes.ExtendedDNSErrors = nonNil(jsonRes.ExtendedDNSErrors)
+	jsonRes.Roles = nonNil(jsonRes.Roles)
+	jsonRes.SourceURLs = nonNil(jsonRes.SourceURLs)
+	if jsonRes.Checks == nil {
+		jsonRes.Checks = map[string]analysis.CheckState{}
+	}
 	if len(res.CachedLatencies) > 0 {
 		avgMs := float64(res.AvgCachedLatency.Microseconds()) / 1000.0
 		jsonRes.AvgCachedLatencyMs = &avgMs
@@ -361,6 +368,14 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		jsonRes.Score = &score
 	}
 	return jsonRes
+}
+
+// nonNil returns s, or an empty slice when s is nil, so it encodes as [].
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // printSingleGroupSummary prints a concluding recommendation across results.
@@ -407,16 +422,20 @@ func printConclusion(writer io.Writer, heading string, results []*analysis.Serve
 	_, _ = fmt.Fprintln(writer, "Note: Results are based on a snapshot in time and your current network conditions.")
 }
 
-// findBestServer returns the recommended server: the accuracy-eligible server
-// with the lowest composite Score. Reliability and DNS-failure rate are already
-// folded into Score, so the only hard gate here is accuracy (applied when
-// -accuracy-file is set). Unrankable servers (+Inf score) are skipped.
-// Returns nil if no eligible server exists.
+// findBestServer returns the recommended server: the eligible server with the
+// lowest composite Score. Reliability and DNS-failure rate are already folded
+// into Score. Two hard gates apply: accuracy (when -accuracy-file is set) and
+// the .com probe (when -dotcom is set), because a failed .com probe drops out
+// of Score rather than penalising it. Unrankable servers (+Inf score) are
+// skipped. Returns nil if no eligible server exists.
 func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analysis.ServerResult {
 	var bestServer *analysis.ServerResult
 	for _, res := range results {
 		if cfg.AccuracyCheckFile != "" && (res.IsAccurate == nil || !*res.IsAccurate) {
 			continue // accuracy gate: skip inaccurate/inconclusive
+		}
+		if cfg.CheckDotcom && res.DotcomLatency == nil {
+			continue // .com gate: skip failed/inconclusive
 		}
 		if math.IsInf(res.Score, 1) {
 			continue // unrankable
@@ -430,47 +449,58 @@ func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analy
 
 func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bestServer *analysis.ServerResult, cfg *config.Config) {
 	const reliabilityThreshold = 99.0
-	issuesFound := false
+	otherIssues := false
 	others := 0
 	for _, res := range results {
-		if res == bestServer {
-			continue
+		isBest := res == bestServer
+		if !isBest {
+			others++
 		}
-		others++
 
 		warningPrefix := fmt.Sprintf("Warning (%s):", res.ServerAddress)
-		serverIssues := false
+		if isBest {
+			warningPrefix = fmt.Sprintf("Warning (recommended, %s):", res.ServerAddress)
+		}
+		warn := func(format string, args ...any) {
+			_, _ = fmt.Fprintf(writer, "%s "+format+"\n", append([]any{warningPrefix}, args...)...)
+			if !isBest {
+				otherIssues = true
+			}
+		}
 		attempted := res.TotalQueries - res.Skipped
 		if attempted > 0 && res.Reliability < reliabilityThreshold {
-			_, _ = fmt.Fprintf(writer, "%s Low reliability (%.1f%%).\n", warningPrefix, res.Reliability)
-			serverIssues = true
+			warn("Low reliability (%.1f%%).", res.Reliability)
 		}
 		if res.DNSFailures > 0 {
-			_, _ = fmt.Fprintf(writer, "%s Returned %d unexpected DNS failure responses during latency probes.\n", warningPrefix, res.DNSFailures)
-			serverIssues = true
+			warn("Returned %d unexpected DNS failure responses during latency probes.", res.DNSFailures)
 		}
 		if cfg.CheckNXDOMAIN && res.HijacksNXDOMAIN != nil && *res.HijacksNXDOMAIN {
-			_, _ = fmt.Fprintf(writer, "%s Appears to hijack NXDOMAIN responses.\n", warningPrefix)
-			serverIssues = true
+			warn("Appears to hijack NXDOMAIN responses.")
 		}
 		if cfg.CheckRebinding && res.BlocksRebinding != nil && !*res.BlocksRebinding {
-			_, _ = fmt.Fprintf(writer, "%s Allows responses with private IPs (rebinding risk).\n", warningPrefix)
-			serverIssues = true
+			warn("Allows responses with private IPs (rebinding risk).")
+		}
+		if cfg.CheckDNSSEC && res.Checks["dnssec"] == analysis.Fail {
+			warn("Does not validate DNSSEC (accepted a deliberately broken signature).")
+		}
+		if cfg.CheckFiltering && res.Checks["filtering"] == analysis.Fail {
+			warn("Did not block the documented filtering probe domains.")
 		}
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
-			_, _ = fmt.Fprintf(writer, "%s Returned inaccurate results for %s.\n", warningPrefix, cfg.AccuracyCheckDomain)
-			serverIssues = true
+			warn("Returned inaccurate results for %s.", cfg.AccuracyCheckDomain)
 		}
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate == nil {
-			_, _ = fmt.Fprintf(writer, "%s Accuracy check for %s was inconclusive.\n", warningPrefix, cfg.AccuracyCheckDomain)
-			serverIssues = true
+			warn("Accuracy check for %s was inconclusive.", cfg.AccuracyCheckDomain)
 		}
-		if serverIssues {
-			issuesFound = true
+		if cfg.CheckDotcom && res.Checks["dotcom"] == analysis.Fail {
+			warn(".com probe did not return NXDOMAIN; excluded from recommendation.")
+		}
+		if cfg.CheckDotcom && res.Checks["dotcom"] == analysis.Inconclusive {
+			warn(".com probe was inconclusive; excluded from recommendation.")
 		}
 	}
 
-	if !issuesFound && bestServer != nil && others > 0 {
+	if !otherIssues && bestServer != nil && others > 0 {
 		_, _ = fmt.Fprintln(writer, "Other tested servers performed reliably without major issues detected.")
 	}
 }
@@ -572,6 +602,10 @@ func formatBoolPointerCSV(val *bool) string {
 	}
 	return strconv.FormatBool(*val)
 }
+
+// JSONSchemaVersion is the schemaVersion written by WriteJSONResults. Bump it
+// whenever a JSON key is renamed, removed or changes type.
+const JSONSchemaVersion = "2"
 
 // JSONReport is the version 2 JSON envelope, including workload metadata.
 type JSONReport struct {

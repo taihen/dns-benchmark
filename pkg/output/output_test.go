@@ -384,7 +384,7 @@ func TestWriteCSVResults(t *testing.T) {
 		"DotcomLatency(ms)",
 		"SupportsDNSSEC", "HijacksNXDOMAIN", "BlocksRebinding", "IsAccurate",
 	}
-	expectedHeader = append(expectedHeader, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "SkippedQueries")
+	expectedHeader = append(expectedHeader, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "DotcomState", "SkippedQueries")
 	assert.Equal(t, expectedHeader, records[0])
 
 	// Check Data Rows (order is sorted: 1.1.1.1, 8.8.8.8, 9.9.9.9)
@@ -632,6 +632,7 @@ func TestSortServerResultsTieBreakByAddress(t *testing.T) {
 
 func TestFindBestServer(t *testing.T) {
 	bp := func(b bool) *bool { return &b }
+	slowDotcom := 80 * time.Millisecond
 
 	tests := []struct {
 		name     string
@@ -673,6 +674,17 @@ func TestFindBestServer(t *testing.T) {
 			},
 			cfg:      &config.Config{AccuracyCheckFile: "accuracy.txt"},
 			wantAddr: "",
+		},
+		{
+			// A failed .com probe drops out of Score, which would otherwise
+			// let it beat a server that answered the probe slowly.
+			name: ".com gate excludes server whose probe failed",
+			results: []*analysis.ServerResult{
+				{ServerAddress: "probe-failed", Score: 5.0},
+				{ServerAddress: "probe-slow", Score: 20.0, DotcomLatency: &slowDotcom},
+			},
+			cfg:      &config.Config{CheckDotcom: true},
+			wantAddr: "probe-slow",
 		},
 		{
 			name:     "no servers yields nil",
@@ -802,6 +814,7 @@ func TestPrintServerWarnings(t *testing.T) {
 	// The best server is identified by pointer, as findBestServer returns it.
 	soleBest := &analysis.ServerResult{ServerAddress: "best:53", Reliability: 100.0}
 	unreliableBest := &analysis.ServerResult{ServerAddress: "best:53", TotalQueries: 10, Reliability: 50.0}
+	hijackingBest := &analysis.ServerResult{ServerAddress: "best:53", Reliability: 100.0, HijacksNXDOMAIN: &bTrue}
 
 	tests := []struct {
 		name         string
@@ -923,12 +936,45 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
-			name:       "skip best server in warnings",
-			results:    []*analysis.ServerResult{unreliableBest},
-			bestServer: unreliableBest,
-			cfg:        &config.Config{},
-			wantAbsent: []string{
-				"Warning (best:53)",
+			name:         "recommended server's own issues are reported",
+			results:      []*analysis.ServerResult{unreliableBest},
+			bestServer:   unreliableBest,
+			cfg:          &config.Config{},
+			wantContains: []string{"Warning (recommended, best:53): Low reliability (50.0%)"},
+		},
+		{
+			name:         "recommended server that hijacks NXDOMAIN is flagged",
+			results:      []*analysis.ServerResult{hijackingBest, {ServerAddress: "good:53", Reliability: 100.0}},
+			bestServer:   hijackingBest,
+			cfg:          &config.Config{CheckNXDOMAIN: true},
+			wantContains: []string{"Warning (recommended, best:53): Appears to hijack NXDOMAIN responses", "Other tested servers performed reliably"},
+		},
+		{
+			name:         "DNSSEC failure is warned",
+			results:      []*analysis.ServerResult{{ServerAddress: "novalidate:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dnssec": analysis.Fail}}},
+			bestServer:   soleBest,
+			cfg:          &config.Config{CheckDNSSEC: true},
+			wantContains: []string{"Warning (novalidate:53): Does not validate DNSSEC"},
+			wantAbsent:   []string{"without major issues"},
+		},
+		{
+			name:         "filtering failure is warned",
+			results:      []*analysis.ServerResult{{ServerAddress: "unfiltered:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"filtering": analysis.Fail}}},
+			bestServer:   soleBest,
+			cfg:          &config.Config{CheckFiltering: true},
+			wantContains: []string{"Warning (unfiltered:53): Did not block the documented filtering probe domains"},
+			wantAbsent:   []string{"without major issues"},
+		},
+		{
+			name: "failed and inconclusive .com probes are warned",
+			results: []*analysis.ServerResult{
+				{ServerAddress: "servfail:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dotcom": analysis.Fail}},
+				{ServerAddress: "timeout:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}},
+			},
+			cfg: &config.Config{CheckDotcom: true},
+			wantContains: []string{
+				"Warning (servfail:53): .com probe did not return NXDOMAIN",
+				"Warning (timeout:53): .com probe was inconclusive",
 			},
 		},
 	}
@@ -956,4 +1002,44 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk ful
 func TestPrintConsoleResultsReportsWriteError(t *testing.T) {
 	err := PrintConsoleResults(failingWriter{}, createSampleResults(), &config.Config{})
 	assert.EqualError(t, err, "disk full")
+}
+
+// TestJSONSchemaV2Keys pins the schema v2 key names. It decodes into generic
+// maps, so renaming a json tag fails here even though a round-trip through
+// JSONReport would still pass.
+func TestJSONSchemaV2Keys(t *testing.T) {
+	cfg := &config.Config{CheckDNSSEC: true, CheckNXDOMAIN: true, CheckRebinding: true, AccuracyCheckFile: "dummy.txt", CheckDotcom: true}
+	var buf bytes.Buffer
+	require.NoError(t, WriteJSONResults(&buf, createSampleResults(), cfg))
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &report))
+	assert.Equal(t, JSONSchemaVersion, report["schemaVersion"])
+	assert.Equal(t, "2", JSONSchemaVersion)
+
+	metadata, ok := report["metadata"].(map[string]any)
+	require.True(t, ok)
+	for _, key := range []string{"startedAt", "queryCorpusId", "requestedQueryCount", "skippedCount", "warmupQueryCount", "interrupted"} {
+		assert.Contains(t, metadata, key)
+	}
+
+	results, ok := report["results"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, results)
+	for _, r := range results {
+		result := r.(map[string]any)
+		for _, key := range []string{
+			"serverAddress", "protocol", "provider", "profile", "roles", "endpointId", "ipFamily", "transport",
+			"tlsServerName", "catalogVersion", "filteringPolicy", "sourceURLs", "comparisonGroup", "checks",
+			"truncatedResponses", "extendedDnsErrors", "policyResponses", "reliabilityPct", "score",
+			"successfulCachedQueries", "successfulUncachedQueries", "timeoutErrors", "transportErrors",
+			"dnsFailures", "malformedResponses",
+		} {
+			assert.Contains(t, result, key)
+		}
+		for _, key := range []string{"roles", "sourceURLs", "extendedDnsErrors"} {
+			assert.IsType(t, []any{}, result[key], "%s must encode as an array, never null", key)
+		}
+		assert.IsType(t, map[string]any{}, result["checks"], "checks must encode as an object, never null")
+	}
 }

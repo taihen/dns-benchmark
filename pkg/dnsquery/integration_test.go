@@ -133,6 +133,16 @@ func TestLocalDoHWireAndValidation(t *testing.T) {
 			name: "valid message one byte over the limit", contentType: "application/dns-message", wantReason: "exceeds 65535 bytes",
 			body: func(t *testing.T, q *dns.Msg) []byte { return paddedReply(t, q, limit+1) },
 		},
+		// A DoH reply is not checked by miekg's exchange, so these pin the
+		// anti-spoofing check that matches the reply to the query.
+		{name: "not marked as a response", contentType: "application/dns-message", wantReason: "not marked as a response",
+			body: mutatedReply(func(m *dns.Msg) { m.Response = false })},
+		{name: "wrong ID", contentType: "application/dns-message", wantReason: "ID mismatch",
+			body: mutatedReply(func(m *dns.Msg) { m.Id++ })},
+		{name: "missing question", contentType: "application/dns-message", wantReason: "question count mismatch",
+			body: mutatedReply(func(m *dns.Msg) { m.Question = nil })},
+		{name: "wrong question", contentType: "application/dns-message", wantReason: "dns question mismatch",
+			body: mutatedReply(func(m *dns.Msg) { m.Question[0].Name = "spoofed.test." })},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -195,6 +205,18 @@ type zeroReader struct{}
 func (zeroReader) Read(p []byte) (int, error) {
 	clear(p)
 	return len(p), nil
+}
+
+// mutatedReply returns a DoH body builder that packs fixtureReply after mutate.
+func mutatedReply(mutate func(*dns.Msg)) func(t *testing.T, q *dns.Msg) []byte {
+	return func(t *testing.T, q *dns.Msg) []byte {
+		t.Helper()
+		reply := fixtureReply(q)
+		mutate(reply)
+		packed, err := reply.Pack()
+		require.NoError(t, err)
+		return packed
+	}
 }
 
 func fixtureReplyBytes(t *testing.T, query *dns.Msg) []byte {
@@ -757,4 +779,98 @@ func TestRebindingProbeAggregation(t *testing.T) {
 			assert.Equal(t, tt.wantState, result.Checks["rebinding"])
 		})
 	}
+}
+
+func TestExtendedDNSErrorCounting(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("example.test.", dns.TypeA)
+	withEDE := func(codes ...uint16) QueryResult {
+		reply := fixtureReply(query)
+		opt := &dns.OPT{Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeOPT}}
+		for _, code := range codes {
+			opt.Option = append(opt.Option, &dns.EDNS0_EDE{InfoCode: code})
+		}
+		reply.Extra = append(reply.Extra, opt)
+		return QueryResult{Response: reply, Latency: time.Millisecond}
+	}
+	tests := []struct {
+		name         string
+		codes        []uint16
+		wantPolicies int
+	}{
+		{"no EDE", nil, 0},
+		{"DNSSEC bogus is not policy", []uint16{dns.ExtendedErrorCodeDNSBogus}, 0},
+		{"below the policy range", []uint16{14}, 0},
+		{"blocked starts the range", []uint16{dns.ExtendedErrorCodeBlocked}, 1},
+		{"filtered ends the range", []uint16{dns.ExtendedErrorCodeFiltered}, 1},
+		{"above the policy range", []uint16{19}, 0},
+		{"two policy codes count one response", []uint16{dns.ExtendedErrorCodeBlocked, dns.ExtendedErrorCodeCensored}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			b := NewBenchmarker(&config.Config{})
+			defer b.Close()
+			result := &analysis.ServerResult{}
+			b.Results.Results[server.String()] = result
+			b.processLatencyResult(queryJobResult{serverInfo: server, result: withEDE(tt.codes...)})
+			assert.Equal(t, tt.wantPolicies, result.PolicyResponses)
+			if len(tt.codes) == 0 {
+				assert.Empty(t, result.ExtendedDNSErrors)
+			} else {
+				assert.Equal(t, tt.codes, result.ExtendedDNSErrors)
+			}
+		})
+	}
+}
+
+func TestDotcomProbeStates(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("dnsbench-dotcom-x.com.", dns.TypeA)
+	reply := func(rcode int) QueryResult {
+		m := new(dns.Msg)
+		m.SetRcode(query, rcode)
+		return QueryResult{Response: m, Latency: 7 * time.Millisecond}
+	}
+	tests := []struct {
+		name        string
+		result      QueryResult
+		skipped     bool
+		wantState   analysis.CheckState
+		wantLatency bool
+	}{
+		{"NXDOMAIN passes and is scored", reply(dns.RcodeNameError), false, analysis.Pass, true},
+		{"SERVFAIL fails", reply(dns.RcodeServerFailure), false, analysis.Fail, false},
+		{"NOERROR fails", reply(dns.RcodeSuccess), false, analysis.Fail, false},
+		{"timeout is inconclusive", QueryResult{Error: errors.New("i/o timeout")}, false, analysis.Inconclusive, false},
+		{"truncated is inconclusive", QueryResult{Response: &dns.Msg{MsgHdr: dns.MsgHdr{Truncated: true, Rcode: dns.RcodeNameError}}}, false, analysis.Inconclusive, false},
+		{"skipped is inconclusive", QueryResult{}, true, analysis.Inconclusive, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{CheckDotcom: true}
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			b := NewBenchmarker(cfg)
+			defer b.Close()
+			result := &analysis.ServerResult{Checks: initialCheckStates(cfg, server)}
+			b.Results.Results[server.String()] = result
+			b.processCheckResult(queryJobResult{serverInfo: server, checkType: "dotcom", result: tt.result, skipped: tt.skipped})
+			assert.Equal(t, tt.wantState, result.Checks["dotcom"])
+			assert.Equal(t, tt.wantLatency, result.DotcomLatency != nil)
+		})
+	}
+	assert.Equal(t, analysis.NotApplicable, initialCheckStates(&config.Config{})["dotcom"])
+}
+
+// TestRunResetsCheckEvidence checks that multi-probe evidence from one Run
+// cannot leak into the next when a Benchmarker is reused.
+func TestRunResetsCheckEvidence(t *testing.T) {
+	cfg := &config.Config{}
+	b := NewBenchmarker(cfg)
+	defer b.Close()
+	b.evidenceFor("stale").rebinding = []analysis.CheckState{analysis.Fail}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b.Run(ctx)
+	assert.Empty(t, b.evidence)
 }

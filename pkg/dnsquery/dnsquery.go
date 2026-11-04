@@ -157,7 +157,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 // The returned bool indicates whether the session is pooled. The pool lock is
 // never held while dialling, so an unreachable endpoint cannot delay queries
 // to other endpoints; in-flight dials reserve pool slots to keep the limit.
-// handshakeTimeout bounds the QUIC handshake idle time so the user's -timeout
+// handshakeTimeout bounds the QUIC handshake idle time so the user's -t timeout
 // applies instead of quic-go's 5s default.
 func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config, handshakeTimeout time.Duration) (*quic.Conn, bool, error) {
 	key := serverAddr + "|" + tlsConfig.ServerName
@@ -610,6 +610,7 @@ func (b *Benchmarker) Close() {
 func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 	servers := b.Config.Servers
 	b.Results = analysis.NewBenchmarkResults()
+	b.evidence = map[string]*checkEvidence{}
 	b.Results.Metadata.StartedAt = time.Now().UTC()
 	b.Results.Metadata.RequestedQueries = b.Config.NumQueries
 	defer func() {
@@ -907,7 +908,7 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 	return checkJobsList
 }
 
-// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
+// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Filtering and Dotcom checks.
 func (b *Benchmarker) runChecksConcurrently(ctx context.Context, servers []config.ServerInfo) {
 	checkJobsList := b.prepareCheckJobs(servers)
 	if len(checkJobsList) == 0 {
@@ -1017,10 +1018,18 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		serverResult.Checks["accuracy"] = analysis.StateFromBool(serverResult.IsAccurate, false)
 	case "dotcom":
 		// The probe name does not exist, so NXDOMAIN is the only correct answer.
-		// A fast SERVFAIL or REFUSED is a failure, not a latency sample.
-		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeNameError {
-			latency := res.result.Latency
-			serverResult.DotcomLatency = &latency
+		// A fast SERVFAIL or REFUSED is a failure, not a latency sample. Errors
+		// and truncation stay inconclusive. Either way the server is not
+		// recommended (see output.findBestServer), so a failed probe cannot
+		// improve its standing by dropping out of the score.
+		if conclusiveResponse(res.result) {
+			if res.result.Response.Rcode == dns.RcodeNameError {
+				latency := res.result.Latency
+				serverResult.DotcomLatency = &latency
+				serverResult.Checks["dotcom"] = analysis.Pass
+			} else {
+				serverResult.Checks["dotcom"] = analysis.Fail
+			}
 		}
 	}
 }

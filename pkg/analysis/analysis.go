@@ -34,7 +34,7 @@ const (
 	weightDotcom   = 0.25
 )
 
-// Holds benchmark results and metrics for a single DNS server.
+// ServerResult holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	catalog.Metadata
 	Checks               map[string]CheckState
@@ -75,9 +75,8 @@ type ServerResult struct {
 
 // BenchmarkResults holds the results for all tested servers.
 type BenchmarkResults struct {
-	Metadata RunMetadata              `json:"metadata"`
+	Metadata RunMetadata
 	Results  map[string]*ServerResult // Map key is config.ServerInfo.String(), unique per endpoint
-
 }
 
 // NewBenchmarkResults creates an initialized BenchmarkResults map.
@@ -240,7 +239,7 @@ func StateFromBool(value *bool, invert bool) CheckState {
 
 // RunMetadata describes the workload and completion state of a benchmark.
 type RunMetadata struct {
-	StartedAt        time.Time `json:"timestamp"`
+	StartedAt        time.Time `json:"startedAt"`
 	CorpusID         string    `json:"queryCorpusId"`
 	RequestedQueries int       `json:"requestedQueryCount"`
 	Skipped          int       `json:"skippedCount"`

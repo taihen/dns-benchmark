@@ -44,7 +44,7 @@ func newDoHClient(server config.ServerInfo, timeout time.Duration) *http.Client 
 
 func initialCheckStates(cfg *config.Config, servers ...config.ServerInfo) map[string]analysis.CheckState {
 	checks := map[string]analysis.CheckState{}
-	for name, enabled := range map[string]bool{"dnssec": cfg.CheckDNSSEC, "nxdomain": cfg.CheckNXDOMAIN, "rebinding": cfg.CheckRebinding, "accuracy": cfg.AccuracyCheckFile != ""} {
+	for name, enabled := range map[string]bool{"dnssec": cfg.CheckDNSSEC, "nxdomain": cfg.CheckNXDOMAIN, "rebinding": cfg.CheckRebinding, "accuracy": cfg.AccuracyCheckFile != "", "dotcom": cfg.CheckDotcom} {
 		checks[name] = analysis.NotApplicable
 		if enabled {
 			checks[name] = analysis.Inconclusive
