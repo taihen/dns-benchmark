@@ -138,6 +138,7 @@ type Config struct {
 }
 
 // DefaultDNSStrings exposes the historical endpoint string format.
+//
 // Deprecated: use Config.LoadServers to retain catalogue metadata and TLS names.
 var DefaultDNSStrings = legacyEndpointStrings()
 
@@ -342,6 +343,18 @@ func isValidHostname(hostname string) bool {
 	return true
 }
 
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // parseServerString parses a server endpoint string into a ServerInfo struct.
 // It handles various formats including IP:port, Host:port, and URLs for DoH.
 // It detects the protocol (UDP, TCP, DoT, DoH, DoQ) from the string prefix or scheme.
@@ -376,17 +389,31 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 			protocol = DOT
 		case "quic":
 			protocol = DOQ
+		case "http":
+			// Plaintext DoH is not supported; treating it as UDP would benchmark
+			// something other than what the user asked for.
+			return ServerInfo{}, fmt.Errorf("unsupported URI scheme %q (DoH requires https)", scheme)
 		default:
-			return ServerInfo{}, fmt.Errorf("unsupported URI scheme %q", scheme)
+			// Historical behaviour, kept for existing server files: warn and
+			// fall back to UDP rather than dropping the entry.
+			fmt.Fprintf(os.Stderr, "Warning: Unrecognized protocol scheme '%s' in '%s', assuming UDP.\n", scheme, serverStr)
 		}
 	}
-	port := "53"
+	defaultPort := "53"
 	if protocol == DOT || protocol == DOQ {
-		port = "853"
+		defaultPort = "853"
 	}
+	port := defaultPort
 	host := addrPart
 	if h, p, err := net.SplitHostPort(addrPart); err == nil {
 		host, port = h, p
+		if !isNumeric(p) {
+			// Historical behaviour: a non-numeric port falls back to the
+			// protocol default with a warning. Numeric out-of-range ports
+			// still fail below, as they could never have connected.
+			fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, h)
+			port = defaultPort
+		}
 	} else if strings.HasPrefix(addrPart, "[") && strings.HasSuffix(addrPart, "]") {
 		host = strings.TrimSuffix(strings.TrimPrefix(addrPart, "["), "]")
 		if ip := net.ParseIP(host); ip == nil || ip.To4() != nil {
@@ -406,7 +433,7 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 
 // parseAndDeduplicateServers parses a list of server endpoint strings,
 // converts them to ServerInfo structs, and removes duplicate entries.
-// Deduplication is based on the String() representation of ServerInfo.
+// Entries are deduplicated by protocol and address.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	seen := make(map[string]struct{})
 	result := make([]ServerInfo, 0)
@@ -419,7 +446,7 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 		}
 		info.Metadata = catalog.Metadata{Provider: "custom", Profile: "custom", Roles: []string{"custom"}, FilteringPolicy: "unknown", ECS: "unknown", IPFamily: addressFamily(info.Hostname), Transport: string(info.Protocol), TLSServerName: info.Hostname}
 		// Deduplicate entries by protocol+address, allowing same address under different protocols
-		key := fmt.Sprintf("%s|%s", info.Protocol, info.Address)
+		key := endpointKey(info)
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			result = append(result, info)

@@ -67,6 +67,25 @@ func Load() (*Catalog, error) {
 	return &c, nil
 }
 
+// Allowed values for policy metadata. Rankings and presets group on these
+// fields, so a misspelling would silently move a profile into its own group or
+// drop it from a preset; Validate rejects anything not listed here.
+var (
+	validRoles             = []string{"general", "security", "family", "ads", "social"}
+	validECS               = []string{"enabled", "disabled", "unknown"}
+	validDNSSECClaims      = []string{"validating", "unknown"}
+	validFilteringPolicies = []string{"unfiltered", "uncensored", "malware", "security", "configurable", "ads", "trackers", "adult", "family", "child", "social", "legal", "legal-only", "proxy", "mixed-content"}
+)
+
+func validFilteringPolicy(policy string) bool {
+	for _, token := range strings.Split(policy, "+") {
+		if !slices.Contains(validFilteringPolicies, token) {
+			return false
+		}
+	}
+	return true
+}
+
 func validName(name string) bool {
 	if name == "" || len(name) > 253 || net.ParseIP(name) != nil {
 		return false
@@ -99,6 +118,20 @@ func (c *Catalog) Validate() error {
 		ids[p.ID] = true
 		if p.Provider == "" || p.DisplayName == "" || len(p.Roles) == 0 || p.FilteringPolicy == "" || p.ECS == "" || p.DNSSECClaim == "" || len(p.SourceURLs) == 0 || len(p.Endpoints) == 0 || len(p.Protocols) == 0 {
 			return fmt.Errorf("incomplete metadata for %s", p.ID)
+		}
+		for _, role := range p.Roles {
+			if !slices.Contains(validRoles, role) {
+				return fmt.Errorf("unknown role %q for %s", role, p.ID)
+			}
+		}
+		if !validFilteringPolicy(p.FilteringPolicy) {
+			return fmt.Errorf("unknown filtering policy %q for %s", p.FilteringPolicy, p.ID)
+		}
+		if !slices.Contains(validECS, p.ECS) {
+			return fmt.Errorf("unknown ECS value %q for %s", p.ECS, p.ID)
+		}
+		if !slices.Contains(validDNSSECClaims, p.DNSSECClaim) {
+			return fmt.Errorf("unknown DNSSEC claim %q for %s", p.DNSSECClaim, p.ID)
 		}
 		if p.Status != "active" && p.Status != "deprecated" {
 			return fmt.Errorf("invalid status for %s", p.ID)

@@ -264,7 +264,9 @@ func TestLocalDoQWireTransport(t *testing.T) {
 	assert.Len(t, result.Response.Answer, 1)
 }
 
-func TestSharedCorpusAndNoWarmup(t *testing.T) {
+// TestSharedCorpusAndCountedWarmup checks that every endpoint gets the same
+// workload plus exactly one reported warm-up query for the cached domain.
+func TestSharedCorpusAndCountedWarmup(t *testing.T) {
 	var mu sync.Mutex
 	names := map[string][]string{}
 	restore := mockAllProtocolFuncs(func(ctx context.Context, s config.ServerInfo, domain string, qtype uint16, timeout time.Duration) QueryResult {
@@ -278,8 +280,18 @@ func TestSharedCorpusAndNoWarmup(t *testing.T) {
 	b := NewBenchmarker(cfg)
 	defer b.Close()
 	results := b.Run(context.Background())
-	require.Len(t, names["a:853"], 6)
-	require.Len(t, names["b:853"], 6)
+	// One warm-up per endpoint (cached domain, unscored) plus the six samples.
+	require.Len(t, names["a:853"], 7)
+	require.Len(t, names["b:853"], 7)
+	assert.Equal(t, "example.test", names["a:853"][0])
+	assert.Equal(t, "example.test", names["b:853"][0])
+	names["a:853"], names["b:853"] = names["a:853"][1:], names["b:853"][1:]
+	assert.Equal(t, 2, results.Metadata.WarmupQueries)
+	for _, addr := range []string{"a:853", "b:853"} {
+		res := results.Results[config.ServerInfo{Address: addr, Protocol: config.DOT}.String()]
+		require.NotNil(t, res)
+		assert.Len(t, res.CachedLatencies, 3, "warm-up must not be scored")
+	}
 	assert.NotEmpty(t, results.Metadata.CorpusID)
 	// Same workload: identical cached names and identical uncached templates,
 	// but no uncached name is shared between endpoints.

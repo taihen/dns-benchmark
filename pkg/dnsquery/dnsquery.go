@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -300,7 +301,7 @@ func performTCPQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 }
 
 // performDoTQuery performs a DNS query over TLS (DoT).
-// It configures TLS settings and uses the "tcp-tls" network.
+// It uses the "tcp-tls" network, or "tcp4-tls"/"tcp6-tls" when a family is forced.
 func performDoTQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	tlsConfig := &tls.Config{
 		ServerName: authenticationName(serverInfo),
@@ -404,10 +405,11 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		MinVersion: tls.VersionTLS13,
 	}
 
-	startTime := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Hostname resolution for a forced family happens before the clock starts:
+	// it measures the system resolver, not the DoQ endpoint.
 	serverAddress := serverInfo.Address
 	if serverInfo.IPFamily == "ipv4" || serverInfo.IPFamily == "ipv6" {
 		host, port, err := net.SplitHostPort(serverAddress)
@@ -429,6 +431,7 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 			serverAddress = net.JoinHostPort(addresses[0].String(), port)
 		}
 	}
+	startTime := time.Now()
 	// Get QUIC connection from pool
 	session, pooled, err := pool.getConnection(ctx, serverAddress, tlsConfig)
 	if err != nil {
@@ -626,13 +629,60 @@ func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 		defer b.progress.stop()
 	}
 
-	// Run Latency Benchmark
+	// Warm up, then run the latency benchmark
+	b.Results.Metadata.WarmupQueries = b.warmUp(ctx, servers)
 	b.runLatencyBenchmark(ctx, servers)
 
 	// Run Specific Checks Concurrently
 	b.runChecksConcurrently(ctx, servers)
 
 	return b.Results
+}
+
+// warmUp sends one unscored query for the cached domain to every endpoint and
+// returns how many were sent. Without it, the first cached sample of each
+// endpoint pays for the DoH/DoQ handshake (later samples reuse the connection)
+// and may also be the cache miss that fills the resolver cache, so the
+// transports with reusable connections would be inflated relative to UDP.
+// Warm-up queries go through the rate limiter like every other probe and are
+// reported in the run metadata rather than hidden.
+func (b *Benchmarker) warmUp(ctx context.Context, servers []config.ServerInfo) int {
+	if b.Config.NumQueries < 1 || len(servers) == 0 {
+		return 0
+	}
+	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
+	if qType == 0 {
+		qType = dns.TypeA
+	}
+	concurrency := b.Config.Concurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+	var sent atomic.Int64
+	var wg sync.WaitGroup
+	for _, server := range servers {
+		wg.Add(1)
+		go func(s config.ServerInfo) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			if ctx.Err() != nil || b.Limiter.Wait(ctx) != nil {
+				return
+			}
+			sent.Add(1)
+			result := b.performQuery(ctx, s, b.Config.Domain, qType, b.Config.Timeout)
+			if result.Error != nil && b.Config.Verbose {
+				fmt.Fprintf(os.Stderr, "Warm-up query for %s failed (not scored): %v\n", s.String(), result.Error)
+			}
+		}(server)
+	}
+	wg.Wait()
+	return int(sent.Load())
 }
 
 // calculateLatencyQueryCounts determines the number of cached and uncached queries.
@@ -964,7 +1014,9 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		serverResult.IsAccurate = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
 		serverResult.Checks["accuracy"] = analysis.StateFromBool(serverResult.IsAccurate, false)
 	case "dotcom":
-		if conclusiveResponse(res.result) {
+		// The probe name does not exist, so NXDOMAIN is the only correct answer.
+		// A fast SERVFAIL or REFUSED is a failure, not a latency sample.
+		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeNameError {
 			latency := res.result.Latency
 			serverResult.DotcomLatency = &latency
 		}

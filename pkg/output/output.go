@@ -18,16 +18,36 @@ import (
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
-// Formats and prints benchmark results to the console.
-// PrintConsoleResults formats and prints the benchmark results to the given writer.
-func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) {
+// errWriter remembers the first write error so that console output, which is
+// written through many Fprintf calls, can report a failure once at the end.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(p)
+	if err != nil {
+		e.err = err
+	}
+	return n, err
+}
+
+// PrintConsoleResults formats and prints the benchmark results to the given
+// writer. It returns the first write error, so a full disk or failed file
+// system does not silently produce a truncated report.
+func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, cfg *config.Config) error {
 	serverResults := getServerResultsSlice(results)
 	sortServerResults(serverResults)
 
-	w := tabwriter.NewWriter(writer, 0, 0, 2, ' ', 0)
+	out := &errWriter{w: writer}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 
 	if version := catalogVersion(results); version != "" {
-		_, _ = fmt.Fprintf(writer, "Catalogue: %s; corpus: %s\n", version, results.Metadata.CorpusID)
+		_, _ = fmt.Fprintf(out, "Catalogue: %s; corpus: %s\n", version, results.Metadata.CorpusID)
 	}
 	header := buildHeader(cfg)
 	_, _ = fmt.Fprintln(w, strings.Join(header, "\t"))
@@ -38,11 +58,14 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
 
-	_ = w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
 
 	if writer == os.Stdout {
-		printSummary(writer, serverResults, cfg)
+		printSummary(out, serverResults, cfg)
 	}
+	return out.err
 }
 
 // WriteCSVResults formats and writes the benchmark results to the given writer in CSV format.

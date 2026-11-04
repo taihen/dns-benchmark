@@ -950,8 +950,8 @@ func TestBenchmarker_Run_CancelMidRunKeepsPartialResults(t *testing.T) {
 	var calls atomic.Int32
 	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 		n := calls.Add(1)
-		if n == 2 {
-			cancel() // user hits Ctrl+C during the second query
+		if n == 3 {
+			cancel() // user hits Ctrl+C during the second measured query (call 1 is warm-up)
 		}
 		req := new(dns.Msg)
 		req.SetQuestion(dns.Fqdn(domain), qType)
@@ -970,7 +970,7 @@ func TestBenchmarker_Run_CancelMidRunKeepsPartialResults(t *testing.T) {
 
 	res, ok := results.Results[serverInfo.String()]
 	require.True(t, ok)
-	assert.Equal(t, int32(2), calls.Load(), "only two queries should be attempted")
+	assert.Equal(t, int32(3), calls.Load(), "only the warm-up and two measured queries should be attempted")
 	assert.Equal(t, 4, res.TotalQueries, "TotalQueries")
 	assert.Len(t, res.CachedLatencies, 2, "completed queries must be kept")
 	assert.Empty(t, res.UncachedLatencies)
@@ -1034,8 +1034,8 @@ func TestRunLatencyBenchmark_InterleavesServersForFairPartialResults(t *testing.
 
 	var calls atomic.Int32
 	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-		if calls.Add(1) == 2 {
-			cancel() // interrupt after two of the four queries
+		if calls.Add(1) == 4 {
+			cancel() // interrupt after two warm-ups and two of the four measured queries
 		}
 		req := new(dns.Msg)
 		req.SetQuestion(dns.Fqdn(domain), qType)
@@ -1176,6 +1176,35 @@ func TestProcessCheckResult_DotcomNXDOMAIN(t *testing.T) {
 	result := benchmarker.Results.Results[serverInfo.String()]
 	require.NotNil(t, result.DotcomLatency, "Dotcom latency should be recorded for NXDOMAIN responses")
 	assert.Equal(t, 18*time.Millisecond, *result.DotcomLatency)
+}
+
+func TestProcessCheckResult_DotcomFailureIsNotLatency(t *testing.T) {
+	tests := []struct {
+		name  string
+		rcode int
+	}{
+		{"servfail", dns.RcodeServerFailure},
+		{"refused", dns.RcodeRefused},
+		{"noerror for nonexistent name", dns.RcodeSuccess},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+			benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second, CheckDotcom: true})
+			defer benchmarker.Close()
+			benchmarker.Results.Results[serverInfo.String()] = &analysis.ServerResult{ServerAddress: serverInfo.String()}
+
+			req := new(dns.Msg)
+			req.SetQuestion("dnsbench-dotcom-abc123.com.", dns.TypeA)
+			benchmarker.processCheckResult(queryJobResult{
+				serverInfo: serverInfo,
+				result:     QueryResult{Latency: time.Millisecond, Response: createTestResponse(req, tt.rcode)},
+				checkType:  "dotcom",
+			})
+
+			assert.Nil(t, benchmarker.Results.Results[serverInfo.String()].DotcomLatency, "only NXDOMAIN is a valid .com latency sample")
+		})
+	}
 }
 
 // --- Testing PerformQuery Dispatcher ---

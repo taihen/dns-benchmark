@@ -130,13 +130,23 @@ func (cfg *Config) LoadServers() error {
 		}
 	}
 	if cfg.IncludeSystemDNS {
-		entries, err := getSystemDNSServers()
+		entries, err := systemDNSServers()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not detect system DNS servers: %v\n", err)
 		}
 		if cfg.Transports == "" || slices.Contains(transports, "udp") {
+			// A system resolver that is also a selected catalogue endpoint
+			// (commonly 1.1.1.1 or 8.8.8.8) is benchmarked once, as the
+			// catalogue entry, rather than twice under two names.
+			selected := make(map[string]bool, len(cfg.Servers))
+			for _, s := range cfg.Servers {
+				selected[endpointKey(s)] = true
+			}
 			for _, s := range parseAndDeduplicateServers(entries) {
 				if cfg.IPFamily != "auto" && s.IPFamily != cfg.IPFamily {
+					continue
+				}
+				if selected[endpointKey(s)] {
 					continue
 				}
 				s.Provider = "system"
@@ -152,14 +162,27 @@ func (cfg *Config) LoadServers() error {
 	return nil
 }
 
+// systemDNSServers is a variable so tests can substitute resolv.conf contents.
+var systemDNSServers = getSystemDNSServers
+
+// endpointKey identifies an endpoint by what is actually contacted, so the same
+// resolver reached through different selection paths compares equal.
+func endpointKey(s ServerInfo) string {
+	return string(s.Protocol) + "|" + s.Address
+}
+
+// legacyEndpointStrings renders the legacy preset in the historical string
+// format. The catalogue is embedded at build time, so a load or selection
+// failure is a build defect; it panics rather than leaving DefaultDNSStrings
+// silently empty.
 func legacyEndpointStrings() []string {
 	c, err := catalog.Load()
 	if err != nil {
-		return nil
+		panic(fmt.Sprintf("dns-benchmark: %v", err))
 	}
 	profiles, err := c.Select("legacy", "")
 	if err != nil {
-		return nil
+		panic(fmt.Sprintf("dns-benchmark: select legacy preset: %v", err))
 	}
 	var entries []string
 	for _, p := range profiles {

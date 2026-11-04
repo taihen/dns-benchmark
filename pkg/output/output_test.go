@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -289,7 +290,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	PrintConsoleResults(&buf, results, cfg)
+	require.NoError(t, PrintConsoleResults(&buf, results, cfg))
 	output := buf.String()
 
 	// Basic checks - presence of headers and server addresses
@@ -946,4 +947,13 @@ func TestPrintServerWarnings(t *testing.T) {
 			}
 		})
 	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestPrintConsoleResultsReportsWriteError(t *testing.T) {
+	err := PrintConsoleResults(failingWriter{}, createSampleResults(), &config.Config{})
+	assert.EqualError(t, err, "disk full")
 }

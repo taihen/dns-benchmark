@@ -289,31 +289,31 @@ func TestParseServerString(t *testing.T) {
 			"invalid prefix",
 			"invalid://1.1.1.1",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
-			true,
+			false,
 		}, // Expect UDP fallback
 		{
 			"udp with bad port",
 			"1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: UDP, Hostname: "1.1.1.1"},
-			true,
+			false,
 		}, // Expect salvaged host, default port
 		{
 			"tcp with bad port",
 			"tcp://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:53", Protocol: TCP, Hostname: "1.1.1.1"},
-			true,
+			false,
 		}, // Expect salvaged host, default port
 		{
 			"dot with bad port",
 			"tls://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:853", Protocol: DOT, Hostname: "1.1.1.1"},
-			true,
+			false,
 		}, // Expect salvaged host, default port
 		{
 			"doq with bad port",
 			"quic://1.1.1.1:bad",
 			ServerInfo{Address: "1.1.1.1:853", Protocol: DOQ, Hostname: "1.1.1.1"},
-			true,
+			false,
 		}, // Expect salvaged host, default port
 		{
 			"invalid hostname",

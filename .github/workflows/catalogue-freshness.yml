@@ -1,0 +1,26 @@
+name: Catalogue freshness
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check resolver catalogue review dates
+        env:
+          DNSBENCH_CHECK_CATALOG_FRESHNESS: "1"
+        run: go test -run TestCatalogFreshness -v ./pkg/catalog

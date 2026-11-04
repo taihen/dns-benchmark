@@ -106,17 +106,25 @@ connect to catalogue IPs while authenticating documented TLS hostnames.
 
 Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
 `udp://`, `tcp://`, `tls://`, `https://`, and `quic://` prefixes. File entries carry
-`custom` provider/profile metadata. Unknown schemes and invalid ports are now
-rejected with a warning instead of being silently reinterpreted. `-f` disables
+`custom` provider/profile metadata. As before, an unrecognised scheme (for example
+`dns://1.2.3.4`) is treated as UDP and a non-numeric port falls back to the
+protocol default, each with a warning. `http://` entries and out-of-range ports
+are rejected, since they could never have been benchmarked as written. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
+System resolvers that are already selected catalogue endpoints (for example
+`1.1.1.1`) are benchmarked once, as the catalogue entry.
 
 All endpoints receive the same latency workload: one randomly generated corpus of
 name templates per run (identified by `queryCorpusId`). Each uncached template is
 made unique per endpoint, so endpoints that share a provider cache (other
 transports or address families) cannot warm each other's "uncached" names. Random
 names are still only *likely* uncached.
-There are no warm-up queries. Connection establishment contributes to measured
-latency, and reusable DoH/DoQ connections may benefit later probes. All probes use
+Before measuring, each endpoint receives one warm-up query for the cached domain.
+It is not scored, it goes through the rate limiter, and the total is reported as
+`warmupQueryCount`. Without it, the first cached sample would carry the DoH/DoQ
+handshake (later samples reuse the connection) and possibly the cache miss that
+fills the resolver cache. DoT and TCP open a connection per query, so their samples
+always include connection setup. All probes use
 the configured global rate limiter. Truncated replies count as failed
 probes in their own counter, are not used as latency samples or check evidence, and
 no uncounted TCP fallback is sent.
@@ -137,10 +145,12 @@ Cloudflare's documented malware/adult test domains for its matching profiles;
 profiles without documented probes report `not_applicable`. Policy probes never
 contribute latency samples.
 
-JSON schema version **2** changes the top-level array to an envelope:
+**Breaking change:** JSON schema version **2** changes the top-level array to an
+envelope. Consumers that read the old array (for example `jq '.[0]'`) should read
+`.results` instead:
 
 ```json
-{"schemaVersion":"2","metadata":{"timestamp":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"interrupted":false},"results":[]}
+{"schemaVersion":"2","metadata":{"timestamp":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":18,"interrupted":false},"results":[]}
 ```
 
 Each result includes provider, profile, roles, endpoint ID, family, transport,
@@ -156,8 +166,11 @@ probe state, and skipped-query columns after the existing metric columns.
 Machine-readable stdout contains only JSON or CSV; progress goes to stderr.
 
 Catalogue structure is validated on every load. Review freshness is a maintenance
-check: the test suite fails once an active entry is older than 366 days, while the
-binary only prints a warning to stderr and keeps running. Deprecated entries are
+check: a scheduled CI workflow fails once an active entry is older than 366 days
+or dated in the future (run it locally with
+`DNSBENCH_CHECK_CATALOG_FRESHNESS=1 go test -run TestCatalogFreshness ./pkg/catalog`).
+It is not part of the per-PR test run, so an ageing catalogue does not block
+unrelated changes. The binary only prints a warning to stderr and keeps running. Deprecated entries are
 excluded from selection. Tests use local
 UDP, TCP, TLS, HTTPS, and QUIC fixtures; they do not query public resolvers. CI
 uses the toolchain in `go.mod` and checks formatting, vet, race tests, and module

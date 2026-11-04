@@ -78,8 +78,36 @@ func TestLegacyFileMetadata(t *testing.T) {
 }
 
 func TestRejectMalformedEndpoints(t *testing.T) {
-	for _, entry := range []string{"http://dns.example", "bogus://1.1.1.1", "1.1.1.1:0", "1.1.1.1:65536", "1.1.1.1:-1", "[::1]:bad", "[::1", "[1.1.1.1]", "https://dns.example:65536/dns-query", "https://user:pass@dns.example/dns-query"} {
+	for _, entry := range []string{"http://dns.example", "1.1.1.1:0", "1.1.1.1:65536", "[::1", "[1.1.1.1]", "https://dns.example:65536/dns-query", "https://user:pass@dns.example/dns-query"} {
 		t.Run(entry, func(t *testing.T) { _, err := parseServerString(entry); assert.Error(t, err) })
+	}
+}
+
+// TestLegacyEndpointFallbacks pins the warn-and-salvage behaviour that existing
+// server files rely on: unknown schemes become UDP and non-numeric ports fall
+// back to the protocol default.
+func TestLegacyEndpointFallbacks(t *testing.T) {
+	tests := []struct {
+		name         string
+		entry        string
+		wantAddress  string
+		wantProtocol ProtocolType
+	}{
+		{"unknown scheme assumes UDP", "dns://1.2.3.4", "1.2.3.4:53", UDP},
+		{"bogus scheme assumes UDP", "bogus://1.1.1.1", "1.1.1.1:53", UDP},
+		{"non-numeric port uses default", "host.example:abc", "host.example:53", UDP},
+		{"negative port uses default", "1.1.1.1:-1", "1.1.1.1:53", UDP},
+		{"empty port uses default", "1.1.1.1:", "1.1.1.1:53", UDP},
+		{"bad IPv6 port uses default", "[::1]:bad", "[::1]:53", UDP},
+		{"bad DoT port uses DoT default", "tls://dns.example:x", "dns.example:853", DOT},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := parseServerString(tt.entry)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAddress, info.Address)
+			assert.Equal(t, tt.wantProtocol, info.Protocol)
+		})
 	}
 }
 
@@ -105,4 +133,28 @@ func TestValidateChecks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSystemDNSDeduplicatedAgainstCatalogue(t *testing.T) {
+	original := systemDNSServers
+	t.Cleanup(func() { systemDNSServers = original })
+	systemDNSServers = func() ([]string, error) { return []string{"1.1.1.1", "192.0.2.53"}, nil }
+
+	cfg := Config{IncludeSystemDNS: true}
+	require.NoError(t, cfg.LoadServers())
+
+	counts := map[string]int{}
+	var system []string
+	for _, s := range cfg.Servers {
+		counts[endpointKey(s)]++
+		if s.Provider == "system" {
+			system = append(system, s.Address)
+		}
+	}
+	assert.Equal(t, 1, counts["udp|1.1.1.1:53"], "system resolver that matches a catalogue endpoint must not be benchmarked twice")
+	assert.Equal(t, []string{"192.0.2.53:53"}, system)
+}
+
+func TestDefaultDNSStringsPopulated(t *testing.T) {
+	assert.Len(t, DefaultDNSStrings, 18)
 }

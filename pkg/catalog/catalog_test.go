@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -36,6 +37,10 @@ func TestCatalogRejectsInvalidMetadata(t *testing.T) {
 		{"bad port", func(c *Catalog) { c.Profiles[0].Endpoints[0].Port = 65536 }},
 		{"malformed verification date", func(c *Catalog) { c.Profiles[0].LastVerified = "03/11/2026" }},
 		{"invalid status", func(c *Catalog) { c.Profiles[0].Status = "retired" }},
+		{"misspelled role", func(c *Catalog) { c.Profiles[0].Roles = []string{"securty"} }},
+		{"unknown filtering policy token", func(c *Catalog) { c.Profiles[0].FilteringPolicy = "malware+adlut" }},
+		{"unknown ECS value", func(c *Catalog) { c.Profiles[0].ECS = "on" }},
+		{"unknown DNSSEC claim", func(c *Catalog) { c.Profiles[0].DNSSECClaim = "yes" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,7 +52,14 @@ func TestCatalogRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
+// TestCatalogFreshness depends on the wall clock, so it only runs when
+// DNSBENCH_CHECK_CATALOG_FRESHNESS is set (see the scheduled catalogue-freshness
+// workflow). Running it on every PR would start failing unrelated changes once
+// the catalogue ages past MaxReviewAge.
 func TestCatalogFreshness(t *testing.T) {
+	if os.Getenv("DNSBENCH_CHECK_CATALOG_FRESHNESS") == "" {
+		t.Skip("set DNSBENCH_CHECK_CATALOG_FRESHNESS=1 to check catalogue review dates against today")
+	}
 	c, err := Load()
 	require.NoError(t, err)
 	// Maintenance reminder: this fails once the embedded catalogue needs re-verification.

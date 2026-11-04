@@ -66,15 +66,17 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "Error creating output file %s: %v\n", cfg.OutputFile, err)
 			return 1
 		}
+		// Closed explicitly below so that a failed final flush is reported;
+		// this deferred close only covers early returns.
 		defer func() { _ = outputWriter.Close() }()
-		fmt.Printf("Writing results to %s...\n", cfg.OutputFile)
+		fmt.Fprintf(os.Stderr, "Writing results to %s...\n", cfg.OutputFile)
 	}
 
 	// Output the results based on the configured format
 	format := strings.ToLower(cfg.OutputFormat)
 	switch format {
 	case "console":
-		output.PrintConsoleResults(outputWriter, results, cfg)
+		err = output.PrintConsoleResults(outputWriter, results, cfg)
 	case "csv":
 		err = output.WriteCSVResults(outputWriter, results, cfg)
 	case "json":
@@ -84,15 +86,19 @@ func run() int {
 		return 1
 	}
 
-	// Handle potential errors during file writing for CSV/JSON
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing %s output: %v\n", format, err)
 		return 1
 	}
 
-	// Indicate completion only when writing to a file
+	// Indicate completion only when writing to a file, and only once the file
+	// has been closed successfully.
 	if outputWriter != os.Stdout {
-		fmt.Println("Done.")
+		if err := outputWriter.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s output: %v\n", format, err)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "Done.")
 	}
 
 	if interrupted {

@@ -240,6 +240,7 @@ type RunMetadata struct {
 	CorpusID         string    `json:"queryCorpusId"`
 	RequestedQueries int       `json:"requestedQueryCount"`
 	Skipped          int       `json:"skippedCount"`
+	WarmupQueries    int       `json:"warmupQueryCount"`
 	Interrupted      bool      `json:"interrupted"`
 }
 
