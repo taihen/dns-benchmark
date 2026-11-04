@@ -995,7 +995,14 @@ func TestQueryWorker_CancelledInFlightQueryIsSkippedNotError(t *testing.T) {
 
 	// Query is in flight when the context is cancelled and returns a
 	// cancellation error: must be recorded as skipped, not as a server fault.
+	// The first call is the unscored warm-up query; cancelling there would make
+	// the measured job exit before performQuery and leave the in-flight path
+	// untested, so cancel during the second (measured) call.
+	var calls atomic.Int32
 	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
+		if calls.Add(1) == 1 {
+			return QueryResult{Response: new(dns.Msg), Latency: time.Millisecond}
+		}
 		cancel()
 		return QueryResult{Error: fmt.Errorf("query failed: %w", context.Canceled)}
 	}
@@ -1008,6 +1015,8 @@ func TestQueryWorker_CancelledInFlightQueryIsSkippedNotError(t *testing.T) {
 
 	res := results.Results[serverInfo.String()]
 	require.NotNil(t, res)
+	assert.Equal(t, 1, results.Metadata.WarmupQueries)
+	assert.Equal(t, int32(2), calls.Load(), "measured query must reach the transport")
 	assert.Equal(t, 1, res.Skipped, "aborted in-flight query should be skipped")
 	assert.Equal(t, 0, res.Errors)
 	assert.Equal(t, 0, res.TransportErrors)
