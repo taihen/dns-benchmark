@@ -40,9 +40,7 @@ const (
 	// dnssecControlDomain is a long-standing correctly signed zone. Validating
 	// resolvers answer it normally, so it separates DNSSEC validation failures
 	// from resolvers that return SERVFAIL for everything.
-	dnssecControlDomain = "ietf.org."
-	// rebindingProbes is the number of rebinding queries per server (A and AAAA).
-	rebindingProbes           = 2
+	dnssecControlDomain       = "ietf.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
 	nxdomainCheckDomainSuffix = ".invalid."
 
@@ -76,12 +74,14 @@ const (
 	OutcomeMalformed  QueryOutcome = "malformed_response"
 )
 
-// quicConnection represents a pooled QUIC connection
+// quicConnection represents a pooled QUIC connection. DoQ sends each query on
+// its own stream (RFC 9250, section 4.2), so one session serves concurrent
+// queries; streams counts the queries currently using it.
 type quicConnection struct {
 	session   *quic.Conn
 	lastUsed  time.Time
 	createdAt time.Time
-	inUse     bool
+	streams   int
 }
 
 // quicConnectionPool manages QUIC connections for DoQ queries
@@ -134,7 +134,7 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 
 		for _, conn := range conns {
 			// Remove connections that are too old or have been idle too long
-			if !conn.inUse &&
+			if conn.streams == 0 &&
 				(now.Sub(conn.createdAt) > connectionTTL ||
 					now.Sub(conn.lastUsed) > maxIdleTime) {
 				if conn.session != nil {
@@ -154,6 +154,9 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 }
 
 // getConnection retrieves or creates a QUIC connection for the server.
+// A live pooled session is shared by concurrent queries, each on its own
+// stream, so the session opened by the warm-up query serves the scored
+// queries that follow instead of each concurrent query dialling its own.
 // The returned bool indicates whether the session is pooled. The pool lock is
 // never held while dialling, so an unreachable endpoint cannot delay queries
 // to other endpoints; in-flight dials reserve pool slots to keep the limit.
@@ -164,15 +167,12 @@ func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr strin
 
 	p.mu.Lock()
 	for _, conn := range p.connections[key] {
-		if conn.inUse {
-			continue
-		}
 		select {
 		case <-conn.session.Context().Done():
 			// Connection is closed; cleanup removes it.
 			continue
 		default:
-			conn.inUse = true
+			conn.streams++
 			conn.lastUsed = time.Now()
 			p.mu.Unlock()
 			return conn.session, true, nil
@@ -215,12 +215,12 @@ func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr strin
 		session:   session,
 		lastUsed:  now,
 		createdAt: now,
-		inUse:     true,
+		streams:   1,
 	})
 	return session, true, nil
 }
 
-// returnConnection marks a connection as available for reuse
+// returnConnection releases one query's use of a pooled connection.
 func (p *quicConnectionPool) returnConnection(serverAddr string, session *quic.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -228,7 +228,9 @@ func (p *quicConnectionPool) returnConnection(serverAddr string, session *quic.C
 	for _, conns := range p.connections {
 		for _, conn := range conns {
 			if conn.session == session {
-				conn.inUse = false
+				if conn.streams > 0 {
+					conn.streams--
+				}
 				conn.lastUsed = time.Now()
 				return
 			}
@@ -535,6 +537,7 @@ type queryJobResult struct {
 	result     QueryResult
 	queryType  analysis.QueryType // For latency jobs
 	checkType  string             // For specific checks
+	qType      uint16             // DNS record type that was queried
 	skipped    bool               // Job not attempted (or aborted) due to cancellation
 }
 
@@ -557,7 +560,11 @@ type Benchmarker struct {
 type checkEvidence struct {
 	dnssecBogus   *QueryResult
 	dnssecControl *QueryResult
-	rebinding     []analysis.CheckState
+	// rebinding holds the per-record-type probe state; it is combined across
+	// all servers in finalizeRebinding.
+	rebinding map[uint16]analysis.CheckState
+	// accuracy holds the per-record-type accuracy result.
+	accuracy map[uint16]*bool
 }
 
 func (b *Benchmarker) evidenceFor(serverKey string) *checkEvidence {
@@ -884,7 +891,7 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 			}
 		}
 		if b.Config.CheckRebinding && b.Config.RebindingDomain != "" {
-			for _, qType := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			for _, qType := range rebindingProbeTypes {
 				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.RebindingDomain, qType: qType, checkType: "rebinding"})
 			}
 		}
@@ -894,12 +901,9 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 			}
 		}
 		if b.Config.AccuracyCheckFile != "" {
-			qtype := uint16(dns.TypeA)
-			first := strings.Split(b.Config.AccuracyCheckIP, ",")[0]
-			if ip := net.ParseIP(first); ip != nil && ip.To4() == nil {
-				qtype = dns.TypeAAAA
+			for _, qType := range accuracyQueryTypes(b.Config.AccuracyCheckIP) {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: qType, checkType: "accuracy"})
 			}
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: qtype, checkType: "accuracy"})
 		}
 		if b.Config.CheckDotcom {
 			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: endpointQueryName(dotcomTemplate, dotcomCheckSuffix, server), qType: dns.TypeA, checkType: "dotcom"})
@@ -946,6 +950,7 @@ func (b *Benchmarker) runChecksConcurrently(ctx context.Context, servers []confi
 	for res := range resultsChan {
 		b.processCheckResult(res)
 	}
+	b.finalizeRebinding(servers)
 }
 
 // processCheckResult updates the benchmark results based on a single check job result.
@@ -995,11 +1000,12 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		}
 		serverResult.Checks["nxdomain"] = analysis.StateFromBool(serverResult.HijacksNXDOMAIN, true)
 	case "rebinding":
+		// Combined across servers in finalizeRebinding.
 		evidence := b.evidenceFor(serverKey)
-		evidence.rebinding = append(evidence.rebinding, analysis.StateFromBool(checkRebindingProtection(res.result), false))
-		state := combineProbeStates(evidence.rebinding, rebindingProbes)
-		serverResult.BlocksRebinding = boolFromState(state)
-		serverResult.Checks["rebinding"] = state
+		if evidence.rebinding == nil {
+			evidence.rebinding = map[uint16]analysis.CheckState{}
+		}
+		evidence.rebinding[res.qType] = analysis.StateFromBool(checkRebindingProtection(res.result), false)
 	case "filtering":
 		state := analysis.Inconclusive
 		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeSuccess && len(res.result.Response.Answer) > 0 {
@@ -1014,7 +1020,12 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		serverResult.FilteringStates = append(serverResult.FilteringStates, state)
 		serverResult.Checks["filtering"] = combineProbeStates(serverResult.FilteringStates, len(res.serverInfo.FilteringProbeDomains))
 	case "accuracy":
-		serverResult.IsAccurate = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+		evidence := b.evidenceFor(serverKey)
+		if evidence.accuracy == nil {
+			evidence.accuracy = map[uint16]*bool{}
+		}
+		evidence.accuracy[res.qType] = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+		serverResult.IsAccurate = combineAccuracyEvidence(evidence.accuracy)
 		serverResult.Checks["accuracy"] = analysis.StateFromBool(serverResult.IsAccurate, false)
 	case "dotcom":
 		// The probe name does not exist, so NXDOMAIN is the only correct answer.
@@ -1051,6 +1062,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 		serverInfo: job.serverInfo,
 		queryType:  job.queryType,
 		checkType:  job.checkType,
+		qType:      job.qType,
 		skipped:    true,
 	}
 
@@ -1068,6 +1080,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 			},
 			queryType: job.queryType,
 			checkType: job.checkType,
+			qType:     job.qType,
 		}
 	}
 	queryResult := b.performQuery(ctx, job.serverInfo, job.domain, job.qType, b.Config.Timeout)
@@ -1080,6 +1093,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 		result:     queryResult,
 		queryType:  job.queryType,
 		checkType:  job.checkType,
+		qType:      job.qType,
 	}
 }
 
@@ -1258,25 +1272,134 @@ func checkNXDOMAINHijack(result QueryResult) *bool {
 }
 
 // checkRebindingProtection classifies one rebinding probe. The controlled
-// domain is queried for both A and AAAA, and the probes are combined with
-// combineProbeStates: any passed-through address fails the check, and
-// protection requires both probes to show stripped answers. Protection
-// is reported only when the resolver answers NOERROR without address records,
-// which is how rebinding filters strip private answers. Address records mean
-// the private answer was passed through. NXDOMAIN and REFUSED are inconclusive:
-// they also result from a mistyped or lapsed test domain, or a resolver that
-// refuses the client, and so are not evidence of rebinding protection.
+// domain must resolve to a private address, so a private, loopback or
+// link-local address in the answer means the resolver passed the rebinding
+// answer through (false). NOERROR without address records is how rebinding
+// filters strip private answers (true), but it is only a candidate pass: a
+// lapsed or misconfigured test domain answers the same way, so
+// finalizeRebinding accepts it only when another probe in the run shows the
+// domain really serves a private record. Public-only answers, NXDOMAIN and
+// REFUSED are inconclusive: they come from a misconfigured or mistyped domain
+// or a resolver that refuses the client, not from rebinding protection.
 func checkRebindingProtection(result QueryResult) *bool {
 	if !conclusiveResponse(result) || result.Response.Rcode != dns.RcodeSuccess {
 		return nil
 	}
+	sawAddress := false
 	for _, rr := range result.Response.Answer {
-		switch rr.(type) {
-		case *dns.A, *dns.AAAA:
-			return boolPtr(false) // Address records passed through: vulnerable to rebinding
+		var address net.IP
+		switch record := rr.(type) {
+		case *dns.A:
+			address = record.A
+		case *dns.AAAA:
+			address = record.AAAA
+		default:
+			continue
+		}
+		sawAddress = true
+		if address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() {
+			return boolPtr(false) // Private answer passed through: vulnerable to rebinding
 		}
 	}
+	if sawAddress {
+		return nil // Only public addresses: the test domain is not a rebinding domain
+	}
 	return boolPtr(true) // NOERROR without address records
+}
+
+// rebindingProbeTypes are the record types queried for the rebinding domain.
+var rebindingProbeTypes = []uint16{dns.TypeA, dns.TypeAAAA}
+
+// finalizeRebinding combines the rebinding probes of every server once all
+// check results are in. A record type counts only when some server in the run
+// passed a private answer of that type through, which proves the test domain
+// serves one; without that control, a stripped answer from a lapsed domain or
+// a domain without that record type would read as protection. Servers fail
+// when any counted probe passed the answer through, pass when every counted
+// probe was stripped, and are inconclusive otherwise, including when no server
+// passed the answer through at all.
+func (b *Benchmarker) finalizeRebinding(servers []config.ServerInfo) {
+	if !b.Config.CheckRebinding || b.Config.RebindingDomain == "" {
+		return
+	}
+	var controlled []uint16
+	for _, qType := range rebindingProbeTypes {
+		for _, server := range servers {
+			if b.evidenceFor(server.String()).rebinding[qType] == analysis.Fail {
+				controlled = append(controlled, qType)
+				break
+			}
+		}
+	}
+	for _, server := range servers {
+		serverResult, ok := b.Results.Results[server.String()]
+		if !ok {
+			continue
+		}
+		state := analysis.Inconclusive
+		if len(controlled) > 0 {
+			evidence := b.evidenceFor(server.String())
+			states := make([]analysis.CheckState, 0, len(controlled))
+			for _, qType := range controlled {
+				if probe, ok := evidence.rebinding[qType]; ok {
+					states = append(states, probe)
+				}
+			}
+			state = combineProbeStates(states, len(controlled))
+		}
+		if serverResult.Checks == nil {
+			serverResult.Checks = initialCheckStates(b.Config, server)
+		}
+		serverResult.BlocksRebinding = boolFromState(state)
+		serverResult.Checks["rebinding"] = state
+	}
+}
+
+// accuracyQueryTypes returns the record types needed to observe every expected
+// address: A when any expected address is IPv4, AAAA when any is IPv6. An
+// IPv4-only list keeps the historical single A query. Unparsable entries are
+// ignored here; checkResponseAccuracy treats them as inconclusive.
+func accuracyQueryTypes(expectedIP string) []uint16 {
+	var hasV4, hasV6 bool
+	for _, value := range strings.Split(expectedIP, ",") {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		switch {
+		case ip == nil:
+		case ip.To4() != nil:
+			hasV4 = true
+		default:
+			hasV6 = true
+		}
+	}
+	var types []uint16
+	if hasV4 || !hasV6 {
+		types = append(types, dns.TypeA)
+	}
+	if hasV6 {
+		types = append(types, dns.TypeAAAA)
+	}
+	return types
+}
+
+// combineAccuracyEvidence merges per-record-type accuracy results. A match on
+// any record type is accurate, matching the any-address semantics of the
+// accuracy file; otherwise any mismatch is inaccurate, and with no conclusive
+// probe the result is nil (inconclusive).
+func combineAccuracyEvidence(results map[uint16]*bool) *bool {
+	var mismatch bool
+	for _, value := range results {
+		if value == nil {
+			continue
+		}
+		if *value {
+			return boolPtr(true)
+		}
+		mismatch = true
+	}
+	if mismatch {
+		return boolPtr(false)
+	}
+	return nil
 }
 
 // checkResponseAccuracy reports whether any A or AAAA answer matches one of the

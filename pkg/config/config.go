@@ -190,7 +190,7 @@ func LoadConfig() *Config {
 	flag.StringVar(&cfg.Profiles, "profile", "", "Comma-separated catalogue profile IDs (overrides preset)")
 	flag.StringVar(&cfg.Transports, "transports", "", "Comma-separated transports: udp,tcp,dot,doh,doq")
 	flag.StringVar(&cfg.IPFamily, "ip-family", "auto", "IP family: ipv4, ipv6, auto (both for explicit catalogue selections)")
-	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain with private A and/or AAAA records; required for a conclusive rebinding probe")
+	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain with private A and/or AAAA records; required with -rebinding")
 	flag.Parse()
 
 	// -version must work without selecting servers or loading the catalogue.

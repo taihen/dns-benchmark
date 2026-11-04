@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/taihen/dns-benchmark/pkg/analysis"
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
@@ -335,10 +336,10 @@ func TestPrintConsoleResults(t *testing.T) {
 	// assert.Contains(t, output, "N/A")     // StdDev Uncached (n=1) - This might appear multiple times, check specific column context if needed
 	assert.Contains(t, output, "66.7%") // Reliability
 	// assert.Contains(t, output, "N/A")     // .com Latency
-	assert.Contains(t, output, "Yes") // DNSSEC
-	// assert.Contains(t, output, "N/A")     // NXDOMAIN
-	assert.Contains(t, output, "Allows")   // Rebinding
-	assert.Contains(t, output, "Mismatch") // Accuracy
+	assert.Contains(t, output, "Yes")          // DNSSEC
+	assert.Contains(t, output, "Inconclusive") // NXDOMAIN enabled but no conclusive probe, not "N/A"
+	assert.Contains(t, output, "Allows")       // Rebinding
+	assert.Contains(t, output, "Mismatch")     // Accuracy
 
 	// Check that summary is NOT printed because the writer is not os.Stdout
 	assert.NotContains(t, output, "--- Conclusion ---")
@@ -977,6 +978,26 @@ func TestPrintServerWarnings(t *testing.T) {
 				"Warning (timeout:53): .com probe was inconclusive",
 			},
 		},
+		{
+			name: "inconclusive checks are warned",
+			results: []*analysis.ServerResult{
+				soleBest,
+				{ServerAddress: "flaky:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{
+					"dnssec": analysis.Inconclusive, "nxdomain": analysis.Inconclusive,
+					"filtering": analysis.Inconclusive, "rebinding": analysis.Inconclusive,
+				}},
+				{ServerAddress: "open:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"rebinding": analysis.Fail}},
+			},
+			bestServer: soleBest,
+			cfg:        &config.Config{CheckDNSSEC: true, CheckNXDOMAIN: true, CheckFiltering: true, CheckRebinding: true, RebindingDomain: "rebind.example."},
+			wantContains: []string{
+				"Warning (flaky:53): DNSSEC check was inconclusive",
+				"Warning (flaky:53): NXDOMAIN check was inconclusive",
+				"Warning (flaky:53): Filtering check was inconclusive",
+				"Warning (flaky:53): Rebinding check was inconclusive",
+			},
+			wantAbsent: []string{"without major issues"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1042,4 +1063,28 @@ func TestJSONSchemaV2Keys(t *testing.T) {
 		}
 		assert.IsType(t, map[string]any{}, result["checks"], "checks must encode as an object, never null")
 	}
+}
+
+// TestUnverifiedRebindingNotePrintedOnce checks that when no server passed the
+// rebinding domain's private answer through, the summary prints one run-level
+// note across all ranking groups instead of a warning per server.
+func TestUnverifiedRebindingNotePrintedOnce(t *testing.T) {
+	cfg := &config.Config{CheckRebinding: true, RebindingDomain: "rebind.example."}
+	inconclusive := map[string]analysis.CheckState{"rebinding": analysis.Inconclusive}
+	results := []*analysis.ServerResult{
+		{ServerAddress: "a:53", Protocol: "UDP", Reliability: 100, Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{CatalogVersion: "v", Provider: "p1", Profile: "p1", Transport: "udp", IPFamily: "ipv4"}},
+		{ServerAddress: "b:853", Protocol: "DoT", Reliability: 100, Score: 20, Checks: inconclusive, Metadata: catalog.Metadata{CatalogVersion: "v", Provider: "p2", Profile: "p2", Transport: "dot", IPFamily: "ipv4"}},
+		{ServerAddress: "c:53", Protocol: "UDP", Reliability: 100, Score: 30, Checks: inconclusive},
+	}
+	var buf bytes.Buffer
+	printSummary(&buf, results, cfg)
+	output := buf.String()
+	assert.Equal(t, 1, strings.Count(output, "test domain is unverified"), output)
+	assert.NotContains(t, output, "Rebinding check was inconclusive")
+
+	results[0].Checks = map[string]analysis.CheckState{"rebinding": analysis.Fail}
+	buf.Reset()
+	printSummary(&buf, results, cfg)
+	assert.NotContains(t, buf.String(), "test domain is unverified")
+	assert.Contains(t, buf.String(), "Rebinding check was inconclusive")
 }

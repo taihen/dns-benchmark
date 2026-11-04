@@ -194,16 +194,16 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		row = append(row, formatDurationPointer(res.DotcomLatency))
 	}
 	if cfg.CheckDNSSEC {
-		row = append(row, formatBoolPointer(res.SupportsDNSSEC, "Yes", "No", "N/A"))
+		row = append(row, formatBoolPointer(res.SupportsDNSSEC, "Yes", "No", "Inconclusive"))
 	}
 	if cfg.CheckNXDOMAIN {
-		row = append(row, formatBoolPointer(res.HijacksNXDOMAIN, "Hijacks", "No Hijack", "N/A"))
+		row = append(row, formatBoolPointer(res.HijacksNXDOMAIN, "Hijacks", "No Hijack", "Inconclusive"))
 	}
 	if cfg.CheckRebinding {
-		row = append(row, formatBoolPointer(res.BlocksRebinding, "Blocks", "Allows", "N/A"))
+		row = append(row, formatBoolPointer(res.BlocksRebinding, "Blocks", "Allows", "Inconclusive"))
 	}
 	if cfg.AccuracyCheckFile != "" {
-		row = append(row, formatBoolPointer(res.IsAccurate, "Accurate", "Mismatch", "N/A"))
+		row = append(row, formatBoolPointer(res.IsAccurate, "Accurate", "Mismatch", "Inconclusive"))
 	}
 	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.IPFamily, res.TLSServerName, res.FilteringPolicy, strconv.Itoa(res.TruncatedResponses))
 }
@@ -477,14 +477,26 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 		if cfg.CheckNXDOMAIN && res.HijacksNXDOMAIN != nil && *res.HijacksNXDOMAIN {
 			warn("Appears to hijack NXDOMAIN responses.")
 		}
+		if cfg.CheckNXDOMAIN && res.Checks["nxdomain"] == analysis.Inconclusive {
+			warn("NXDOMAIN check was inconclusive.")
+		}
 		if cfg.CheckRebinding && res.BlocksRebinding != nil && !*res.BlocksRebinding {
 			warn("Allows responses with private IPs (rebinding risk).")
+		}
+		if cfg.CheckRebinding && res.Checks["rebinding"] == analysis.Inconclusive {
+			warn("Rebinding check was inconclusive.")
 		}
 		if cfg.CheckDNSSEC && res.Checks["dnssec"] == analysis.Fail {
 			warn("Does not validate DNSSEC (accepted a deliberately broken signature).")
 		}
+		if cfg.CheckDNSSEC && res.Checks["dnssec"] == analysis.Inconclusive {
+			warn("DNSSEC check was inconclusive.")
+		}
 		if cfg.CheckFiltering && res.Checks["filtering"] == analysis.Fail {
 			warn("Did not block the documented filtering probe domains.")
+		}
+		if cfg.CheckFiltering && res.Checks["filtering"] == analysis.Inconclusive {
+			warn("Filtering check was inconclusive.")
 		}
 		if cfg.AccuracyCheckFile != "" && res.IsAccurate != nil && !*res.IsAccurate {
 			warn("Returned inaccurate results for %s.", cfg.AccuracyCheckDomain)
@@ -624,6 +636,16 @@ type JSONReport struct {
 // summarised together with the original single "Conclusion"; a run made only of
 // such endpoints prints exactly that.
 func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
+	if rebindingUnverified(results, cfg) {
+		// Every server is inconclusive for the same run-level reason, so one
+		// note replaces a rebinding warning per server in every group.
+		defer func() {
+			_, _ = fmt.Fprintf(writer, "Note: no tested server passed the private answer for %s through, so the test domain is unverified and rebinding protection is inconclusive for every server. Include a resolver without rebinding protection to confirm it.\n", cfg.RebindingDomain)
+		}()
+		withoutRebinding := *cfg
+		withoutRebinding.CheckRebinding = false
+		cfg = &withoutRebinding
+	}
 	rankingGroups := map[string][]*analysis.ServerResult{}
 	policyGroups := map[string][]*analysis.ServerResult{}
 	var uncatalogued []*analysis.ServerResult
@@ -670,6 +692,21 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	}
 
 	printConclusion(writer, "\n--- Conclusion (system and custom endpoints, no catalogue policy) ---", uncatalogued, cfg)
+}
+
+// rebindingUnverified reports whether the rebinding check ran but no server
+// reached a conclusive state, which happens when no tested server passed the
+// test domain's private answer through (see dnsquery finalizeRebinding).
+func rebindingUnverified(results []*analysis.ServerResult, cfg *config.Config) bool {
+	if !cfg.CheckRebinding || len(results) == 0 {
+		return false
+	}
+	for _, res := range results {
+		if state := res.Checks["rebinding"]; state == analysis.Pass || state == analysis.Fail {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedKeys(groups map[string][]*analysis.ServerResult) []string {

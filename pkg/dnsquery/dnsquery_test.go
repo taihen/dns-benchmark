@@ -380,7 +380,7 @@ func TestPrepareCheckJobs_RebindingQueriesAAndAAAA(t *testing.T) {
 	defer benchmarker.Close()
 
 	jobs := benchmarker.prepareCheckJobs([]config.ServerInfo{server})
-	require.Len(t, jobs, rebindingProbes)
+	require.Len(t, jobs, len(rebindingProbeTypes))
 	var qTypes []uint16
 	for _, job := range jobs {
 		assert.Equal(t, "rebinding", job.checkType)
@@ -424,13 +424,14 @@ func TestCheckRebindingProtection(t *testing.T) {
 	req := new(dns.Msg)
 	req.SetQuestion(domain, dns.TypeA)
 
-	// Simulate responses - actual IP doesn't matter for the check logic, only presence of answer
 	respBlockedNX := createTestResponse(req, dns.RcodeNameError)
 	respBlockedRefused := createTestResponse(req, dns.RcodeRefused)
 	respBlockedNoErrorNoAnswer := createTestResponse(req, dns.RcodeSuccess)                        // NOERROR, no answer
 	respAllowed := createTestResponse(req, dns.RcodeSuccess, createARecord(domain, "192.168.1.1")) // Allowed (returns answer)
 	respTruncated := createTestResponse(req, dns.RcodeSuccess)
 	respTruncated.Truncated = true
+	respPublicOnly := createTestResponse(req, dns.RcodeSuccess, createARecord(domain, "93.184.216.34"))
+	respLoopback := createTestResponse(req, dns.RcodeSuccess, createARecord(domain, "127.0.0.1"))
 	respCNAMEOnly := createTestResponse(req, dns.RcodeSuccess, &dns.CNAME{Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60}, Target: "target.fixture.invalid."})
 
 	tests := []struct {
@@ -443,7 +444,9 @@ func TestCheckRebindingProtection(t *testing.T) {
 		{"Truncated NOERROR is inconclusive", QueryResult{Response: respTruncated}, nil},
 		{"Blocked (NOERROR, No Answer)", QueryResult{Response: respBlockedNoErrorNoAnswer}, boolPtr(true)},
 		{"Blocked (NOERROR, CNAME without address)", QueryResult{Response: respCNAMEOnly}, boolPtr(true)},
-		{"Allowed (NOERROR + Answer)", QueryResult{Response: respAllowed}, boolPtr(false)},
+		{"Allowed (NOERROR + private answer)", QueryResult{Response: respAllowed}, boolPtr(false)},
+		{"Allowed (NOERROR + loopback answer)", QueryResult{Response: respLoopback}, boolPtr(false)},
+		{"Public-only answer is inconclusive (not a rebinding domain)", QueryResult{Response: respPublicOnly}, nil},
 		{"Query Error", QueryResult{Error: errors.New("fail")}, nil},
 		{"Nil Response", QueryResult{Response: nil}, nil},
 	}
@@ -1347,7 +1350,6 @@ func TestQuicConnectionPool(t *testing.T) {
 			session:   nil,                            // Mock session - won't be used in cleanup test
 			lastUsed:  time.Now().Add(-1 * time.Hour), // Very old
 			createdAt: time.Now().Add(-2 * time.Hour), // Very old
-			inUse:     false,
 		}
 		testPool.connections[serverAddr] = []*quicConnection{mockConn}
 		testPool.mu.Unlock()

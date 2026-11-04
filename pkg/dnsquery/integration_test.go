@@ -570,8 +570,42 @@ func TestDoQPoolLimitHoldsUnderConcurrentDials(t *testing.T) {
 	assert.LessOrEqual(t, len(pool.connections[address+"|resolver.fixture"]), maxPooledConnections)
 	assert.Empty(t, pool.dialing)
 	for _, conn := range pool.connections[address+"|resolver.fixture"] {
-		assert.False(t, conn.inUse)
+		assert.Zero(t, conn.streams)
 	}
+}
+
+// TestDoQSessionSharedAfterWarmup checks that once a session exists, concurrent
+// queries share it on separate streams instead of dialling new sessions, so
+// the warm-up handshake is the only one and scored samples do not pay for it.
+func TestDoQSessionSharedAfterWarmup(t *testing.T) {
+	address, roots := startDoQFixture(t)
+	pool := newQuicConnectionPool()
+	defer pool.shutdownPool()
+	info := config.ServerInfo{Address: address, TLSRootCAs: roots, Metadata: catalog.Metadata{TLSServerName: "resolver.fixture"}}
+	key := address + "|resolver.fixture"
+
+	require.NoError(t, performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 5*time.Second, pool).Error)
+
+	const queries = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, queries)
+	for range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 5*time.Second, pool).Error
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		assert.NoError(t, err)
+	}
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	require.Len(t, pool.connections[key], 1, "concurrent queries dialled extra sessions")
+	assert.Zero(t, pool.connections[key][0].streams)
 }
 
 func TestCombineProbeStates(t *testing.T) {
@@ -725,9 +759,10 @@ func TestDNSSECEvidence(t *testing.T) {
 	}
 }
 
-// TestRebindingProbeAggregation checks that A and AAAA probes are combined:
-// an address passed through on either family fails the check, and protection
-// requires both probes to show stripped answers.
+// TestRebindingProbeAggregation checks how A and AAAA probes combine across
+// servers: a passed-through private answer fails the check, and a stripped
+// answer counts as protection only for record types that some server in the
+// run passed through, proving the test domain serves them.
 func TestRebindingProbeAggregation(t *testing.T) {
 	queryA := new(dns.Msg)
 	queryA.SetQuestion(rebindingCheckDomain, dns.TypeA)
@@ -744,39 +779,110 @@ func TestRebindingProbeAggregation(t *testing.T) {
 	strippedAAAA.SetRcode(queryAAAA, dns.RcodeSuccess)
 
 	type probe struct {
+		qType   uint16
 		result  QueryResult
 		skipped bool
 	}
-	r := func(m *dns.Msg) probe { return probe{result: QueryResult{Response: m}} }
-	failed := probe{result: QueryResult{Error: errors.New("doh http request failed")}}
-	skipped := probe{skipped: true}
+	a := func(m *dns.Msg) probe { return probe{qType: dns.TypeA, result: QueryResult{Response: m}} }
+	aaaa := func(m *dns.Msg) probe { return probe{qType: dns.TypeAAAA, result: QueryResult{Response: m}} }
+	failedAAAA := probe{qType: dns.TypeAAAA, result: QueryResult{Error: errors.New("doh http request failed")}}
+	skippedAAAA := probe{qType: dns.TypeAAAA, skipped: true}
 
 	tests := []struct {
 		name      string
+		control   []probe // probes of a second server in the same run
 		probes    []probe
 		wantValue *bool
 		wantState analysis.CheckState
 	}{
-		{"only AAAA passes through", []probe{r(strippedA), r(passedAAAA)}, boolPtr(false), analysis.Fail},
-		{"only A passes through", []probe{r(passedA), r(strippedAAAA)}, boolPtr(false), analysis.Fail},
-		{"AAAA passes through, A errored", []probe{failed, r(passedAAAA)}, boolPtr(false), analysis.Fail},
-		{"both stripped", []probe{r(strippedA), r(strippedAAAA)}, boolPtr(true), analysis.Pass},
-		{"A stripped, AAAA skipped", []probe{r(strippedA), skipped}, nil, analysis.Inconclusive},
-		{"A stripped, AAAA errored", []probe{r(strippedA), failed}, nil, analysis.Inconclusive},
-		{"single stripped probe", []probe{r(strippedA)}, nil, analysis.Inconclusive},
+		{"only AAAA passes through", nil, []probe{a(strippedA), aaaa(passedAAAA)}, boolPtr(false), analysis.Fail},
+		{"only A passes through", nil, []probe{a(passedA), aaaa(strippedAAAA)}, boolPtr(false), analysis.Fail},
+		{"AAAA passes through, A errored", nil, []probe{{qType: dns.TypeA, result: QueryResult{Error: errors.New("timeout")}}, aaaa(passedAAAA)}, boolPtr(false), analysis.Fail},
+		{"both stripped, both types controlled", []probe{a(passedA), aaaa(passedAAAA)}, []probe{a(strippedA), aaaa(strippedAAAA)}, boolPtr(true), analysis.Pass},
+		{"both stripped, no server passed through", []probe{a(strippedA), aaaa(strippedAAAA)}, []probe{a(strippedA), aaaa(strippedAAAA)}, nil, analysis.Inconclusive},
+		{"both stripped, single server", nil, []probe{a(strippedA), aaaa(strippedAAAA)}, nil, analysis.Inconclusive},
+		{"A-only domain: AAAA not required", []probe{a(passedA), aaaa(strippedAAAA)}, []probe{a(strippedA), failedAAAA}, boolPtr(true), analysis.Pass},
+		{"A stripped, AAAA skipped, both controlled", []probe{a(passedA), aaaa(passedAAAA)}, []probe{a(strippedA), skippedAAAA}, nil, analysis.Inconclusive},
+		{"A stripped, AAAA errored, both controlled", []probe{a(passedA), aaaa(passedAAAA)}, []probe{a(strippedA), failedAAAA}, nil, analysis.Inconclusive},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			control := config.ServerInfo{Address: "control", Protocol: config.UDP}
+			servers := []config.ServerInfo{server}
 			b := NewBenchmarker(&config.Config{CheckRebinding: true, RebindingDomain: rebindingCheckDomain})
 			defer b.Close()
 			result := &analysis.ServerResult{}
 			b.Results.Results[server.String()] = result
-			for _, p := range tt.probes {
-				b.processCheckResult(queryJobResult{serverInfo: server, checkType: "rebinding", result: p.result, skipped: p.skipped})
+			if tt.control != nil {
+				servers = append(servers, control)
+				b.Results.Results[control.String()] = &analysis.ServerResult{}
 			}
+			feed := func(s config.ServerInfo, probes []probe) {
+				for _, p := range probes {
+					b.processCheckResult(queryJobResult{serverInfo: s, checkType: "rebinding", qType: p.qType, result: p.result, skipped: p.skipped})
+				}
+			}
+			feed(server, tt.probes)
+			feed(control, tt.control)
+			b.finalizeRebinding(servers)
 			assert.Equal(t, tt.wantValue, result.BlocksRebinding)
 			assert.Equal(t, tt.wantState, result.Checks["rebinding"])
+		})
+	}
+}
+
+// TestMixedFamilyAccuracy checks that an accuracy file listing IPv4 and IPv6
+// addresses queries both record types and that a match on either is accurate.
+func TestMixedFamilyAccuracy(t *testing.T) {
+	assert.Equal(t, []uint16{dns.TypeA}, accuracyQueryTypes("192.0.2.1"))
+	assert.Equal(t, []uint16{dns.TypeAAAA}, accuracyQueryTypes("2001:db8::1"))
+	assert.Equal(t, []uint16{dns.TypeA, dns.TypeAAAA}, accuracyQueryTypes("2001:db8::1,192.0.2.1"))
+	assert.Equal(t, []uint16{dns.TypeA}, accuracyQueryTypes("not-an-ip"))
+
+	const domain = "accuracy.fixture."
+	const expected = "2001:db8::1,192.0.2.1"
+	reply := func(qType uint16, rr dns.RR) QueryResult {
+		q := new(dns.Msg)
+		q.SetQuestion(domain, qType)
+		m := fixtureReply(q)
+		if rr != nil {
+			m.Answer = []dns.RR{rr}
+		}
+		return QueryResult{Response: m}
+	}
+	hdrA := dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET}
+	hdrAAAA := dns.RR_Header{Name: domain, Rrtype: dns.TypeAAAA, Class: dns.ClassINET}
+	goodA := reply(dns.TypeA, &dns.A{Hdr: hdrA, A: net.ParseIP("192.0.2.1")})
+	badA := reply(dns.TypeA, &dns.A{Hdr: hdrA, A: net.ParseIP("192.0.2.99")})
+	goodAAAA := reply(dns.TypeAAAA, &dns.AAAA{Hdr: hdrAAAA, AAAA: net.ParseIP("2001:db8::1")})
+	badAAAA := reply(dns.TypeAAAA, &dns.AAAA{Hdr: hdrAAAA, AAAA: net.ParseIP("2001:db8::99")})
+	timeout := QueryResult{Error: errors.New("timeout")}
+
+	tests := []struct {
+		name      string
+		a, aaaa   QueryResult
+		wantState analysis.CheckState
+	}{
+		{"IPv4 matches, IPv6 differs", goodA, badAAAA, analysis.Pass},
+		{"IPv6 matches, IPv4 differs", badA, goodAAAA, analysis.Pass},
+		{"neither matches", badA, badAAAA, analysis.Fail},
+		{"IPv4 differs, IPv6 timed out", badA, timeout, analysis.Fail},
+		{"both timed out", timeout, timeout, analysis.Inconclusive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			cfg := &config.Config{AccuracyCheckFile: "file", AccuracyCheckDomain: domain, AccuracyCheckIP: expected}
+			b := NewBenchmarker(cfg)
+			defer b.Close()
+			jobs := b.prepareCheckJobs([]config.ServerInfo{server})
+			require.Len(t, jobs, 2)
+			result := &analysis.ServerResult{Checks: initialCheckStates(cfg, server)}
+			b.Results.Results[server.String()] = result
+			b.processCheckResult(queryJobResult{serverInfo: server, checkType: "accuracy", qType: dns.TypeA, result: tt.a})
+			b.processCheckResult(queryJobResult{serverInfo: server, checkType: "accuracy", qType: dns.TypeAAAA, result: tt.aaaa})
+			assert.Equal(t, tt.wantState, result.Checks["accuracy"])
 		})
 	}
 }
@@ -868,7 +974,7 @@ func TestRunResetsCheckEvidence(t *testing.T) {
 	cfg := &config.Config{}
 	b := NewBenchmarker(cfg)
 	defer b.Close()
-	b.evidenceFor("stale").rebinding = []analysis.CheckState{analysis.Fail}
+	b.evidenceFor("stale").rebinding = map[uint16]analysis.CheckState{dns.TypeA: analysis.Fail}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	b.Run(ctx)

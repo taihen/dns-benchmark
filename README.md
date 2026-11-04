@@ -50,7 +50,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver rejects a deliberately broken signed domain, using a correctly signed control domain (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
-  - **DNS Rebinding Protection:** Checks if the resolver strips private A and AAAA answers (`-rebinding` flag, default: false; requires `-rebinding-domain`).
+  - **DNS Rebinding Protection:** Checks if the resolver strips private A and AAAA answers (`-rebinding` flag, default: false; requires `-rebinding-domain`). Confirming protection needs at least one tested resolver that passes the private answer through.
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag). A missing or unreadable file, or one with no valid entry, is an error.
 - **Configuration:**
   - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
@@ -59,7 +59,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
-  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed checks are warned about for every server, including the recommended one.
+  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed and inconclusive checks are warned about for every server, including the recommended one; the console shows `Inconclusive` for an enabled check without conclusive evidence.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
@@ -112,7 +112,11 @@ Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
 `custom` provider/profile metadata. As before, an unrecognised scheme (for example
 `dns://1.2.3.4`) is treated as UDP and a non-numeric port (including a negative
 one such as `:-1`) falls back to the protocol default, each with a warning.
-`http://` entries and ports outside 1–65535 (such as `:0`) are rejected, since they could never have been benchmarked as written. `-f` disables
+Entries that could never have been benchmarked as written are now rejected
+instead of being repaired with a warning: `http://` entries, ports outside 1–65535
+(such as `:0`), bracketed IPv4 literals (`[1.2.3.4]`), extra-colon forms such as
+`host:1:2`, and DoH URLs with user info (`https://user@host/...`), a `#fragment`,
+or an out-of-range port. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
 System resolvers that are already selected catalogue endpoints (for example
 `1.1.1.1`) are benchmarked once, as the catalogue entry.
@@ -125,8 +129,11 @@ names are still only *likely* uncached.
 Before measuring, each endpoint receives one warm-up query for the cached domain.
 It is not scored, it goes through the rate limiter, and the total is reported as
 `warmupQueryCount`. Without it, the first cached sample would carry the DoH/DoQ
-handshake (later samples reuse the connection) and possibly the cache miss that
-fills the resolver cache. DoT and TCP open a connection per query, so their samples
+handshake and possibly the cache miss that fills the resolver cache. Later DoQ
+queries, including concurrent ones, share the warmed QUIC session on separate
+streams; DoH reuses the client's keep-alive connections (HTTP/2 multiplexes
+concurrent requests), though with HTTP/1.1 a concurrent request may still open a
+new connection. DoT and TCP open a connection per query, so their samples
 always include connection setup. All probes use
 the configured global rate limiter. Truncated replies count as failed
 probes in their own counter, are not used as latency samples or check evidence, and
@@ -140,10 +147,17 @@ otherwise it is inconclusive, since a resolver that fails every query also retur
 SERVFAIL. NXDOMAIN checks use two reserved-domain names and recognize CNAME
 redirects. Rebinding requires `-rebinding-domain` pointing to a controlled domain
 with private A and/or AAAA records; `-rebinding` without it is rejected. Both A and
-AAAA are queried: a returned address on either fails the check, and only NOERROR
-without address records on both counts as protection. NXDOMAIN and REFUSED are
-inconclusive, since a mistyped domain or a refusing resolver produces them too. Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6;
-the first expected address chooses A or AAAA. `-filtering` currently uses
+AAAA are queried: a private, loopback or link-local address on either fails the
+check. NOERROR without address records counts as protection only for a record type
+that at least one other tested server passed through, which proves the domain
+really serves that private record; a lapsed domain answers NOERROR without records
+too. If no tested server passes the answer through, every server is inconclusive
+and the summary says so; include a resolver without rebinding protection to
+confirm the domain. Public-only answers, NXDOMAIN and REFUSED are inconclusive,
+since a misconfigured or mistyped domain or a refusing resolver produces them too.
+Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6. A is
+queried when any expected address is IPv4 and AAAA when any is IPv6; a match on
+either record type counts as accurate. `-filtering` currently uses
 Cloudflare's documented malware/adult test domains for its matching profiles;
 profiles without documented probes report `not_applicable`. Policy probes never
 contribute latency samples.
