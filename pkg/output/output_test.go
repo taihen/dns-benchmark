@@ -342,13 +342,12 @@ func TestPrintConsoleResults(t *testing.T) {
 	assert.Contains(t, output, "Allows")       // Rebinding
 	assert.Contains(t, output, "Mismatch")     // Accuracy
 
-	// Check that summary is NOT printed because the writer is not os.Stdout
-	assert.NotContains(t, output, "--- Conclusion ---")
-	assert.NotContains(t, output, "Fastest reliable server")
-	assert.NotContains(t, output, "Warning (8.8.8.8:53):") // Specific warnings shouldn't be there either
-	assert.NotContains(t, output, "Warning (tls://9.9.9.9:853):")
-
-	// We cannot easily test the os.Stdout case here, so we only test the buffer case.
+	// The summary goes to any writer, so -format console -o FILE keeps the
+	// recommendation and the inconclusive warnings.
+	assert.Contains(t, output, "--- Conclusion ---")
+	assert.Contains(t, output, "Recommended server: 1.1.1.1:53")
+	assert.Contains(t, output, "Warning (8.8.8.8:53): Returned inaccurate results")
+	assert.Contains(t, output, "Warning (tls://9.9.9.9:853): Accuracy check for test.local. was inconclusive.")
 }
 
 func TestWriteCSVResults(t *testing.T) {
@@ -1153,4 +1152,84 @@ func TestUnverifiedRebindingNotePrintedOnce(t *testing.T) {
 	printSummary(&buf, results, cfg)
 	assert.NotContains(t, buf.String(), "test domain is unverified")
 	assert.Contains(t, buf.String(), "Rebinding check was inconclusive")
+}
+
+func TestFormatDotcomKeepsFailAndInconclusiveDistinct(t *testing.T) {
+	latency := 15 * time.Millisecond
+	tests := []struct {
+		name string
+		res  analysis.ServerResult
+		want string
+	}{
+		{"passed shows latency", analysis.ServerResult{DotcomLatency: &latency, Checks: map[string]analysis.CheckState{"dotcom": analysis.Pass}}, "15.0 ms"},
+		{"wrong rcode shows fail", analysis.ServerResult{Checks: map[string]analysis.CheckState{"dotcom": analysis.Fail}}, "Fail"},
+		{"timeout shows inconclusive", analysis.ServerResult{Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}}, "Inconclusive"},
+		{"no state shows N/A", analysis.ServerResult{}, "N/A"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatDotcom(&tt.res))
+		})
+	}
+}
+
+func TestFormatCheckState(t *testing.T) {
+	tests := []struct {
+		state analysis.CheckState
+		want  string
+	}{
+		{analysis.Pass, "Pass"},
+		{analysis.Fail, "Fail"},
+		{analysis.Inconclusive, "Inconclusive"},
+		{analysis.NotApplicable, "N/A"},
+		{"", "N/A"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.state), func(t *testing.T) {
+			assert.Equal(t, tt.want, formatCheckState(tt.state))
+		})
+	}
+}
+
+func TestSkippedDotcomWarning(t *testing.T) {
+	tests := []struct {
+		name    string
+		skipped bool
+		want    string
+	}{
+		{"probe sent but inconclusive", false, ".com probe was inconclusive; excluded from recommendation."},
+		{"probe never sent", true, ".com probe was not sent before the run was interrupted; excluded from recommendation."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := &analysis.ServerResult{
+				ServerAddress: "1.1.1.1:53",
+				TotalQueries:  2,
+				Checks:        map[string]analysis.CheckState{"dotcom": analysis.Inconclusive},
+				DotcomSkipped: tt.skipped,
+			}
+			var buf bytes.Buffer
+			printServerWarnings(&buf, []*analysis.ServerResult{res}, nil, &config.Config{CheckDotcom: true})
+			assert.Contains(t, buf.String(), tt.want)
+		})
+	}
+}
+
+func TestFindBestServerSkipsUnsentDotcomProbe(t *testing.T) {
+	latency := 20 * time.Millisecond
+	skipped := &analysis.ServerResult{ServerAddress: "skipped", Score: 5, Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}, DotcomSkipped: true}
+	passed := &analysis.ServerResult{ServerAddress: "passed", Score: 30, DotcomLatency: &latency, Checks: map[string]analysis.CheckState{"dotcom": analysis.Pass}}
+	tests := []struct {
+		name    string
+		results []*analysis.ServerResult
+		want    *analysis.ServerResult
+	}{
+		{"faster skipped server is not recommended", []*analysis.ServerResult{skipped, passed}, passed},
+		{"only skipped servers gives no recommendation", []*analysis.ServerResult{skipped}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Same(t, tt.want, findBestServer(tt.results, &config.Config{CheckDotcom: true}))
+		})
+	}
 }

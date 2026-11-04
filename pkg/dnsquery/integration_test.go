@@ -506,6 +506,37 @@ func startDoQFixture(t *testing.T) (string, *x509.CertPool) {
 	return listener.Addr().String(), roots
 }
 
+// TestDoQAuthenticatesTLSServerName checks that a DoQ endpoint is verified
+// against its catalogue TLS name, not the IP it connects to, and that a
+// certificate for another name is rejected.
+func TestDoQAuthenticatesTLSServerName(t *testing.T) {
+	address, roots := startDoQFixture(t)
+	tests := []struct {
+		name       string
+		serverName string
+		wantErr    bool
+	}{
+		{"matching name", "resolver.fixture", false},
+		{"other name", "wrong.fixture", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newQuicConnectionPool()
+			defer pool.shutdownPool()
+			info := config.ServerInfo{Address: address, Hostname: "127.0.0.1", TLSRootCAs: roots, Metadata: catalog.Metadata{TLSServerName: tt.serverName}}
+			result := performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 2*time.Second, pool)
+			if tt.wantErr {
+				var hostnameErr x509.HostnameError
+				require.Error(t, result.Error)
+				assert.ErrorAs(t, result.Error, &hostnameErr, "the failure must be certificate name verification, not an unrelated error")
+				return
+			}
+			require.NoError(t, result.Error)
+			assert.Len(t, result.Response.Answer, 1)
+		})
+	}
+}
+
 // TestDoQPoolDialDoesNotBlockOtherEndpoints checks that a dial to an
 // unreachable DoQ endpoint does not hold the pool and delay healthy endpoints.
 func TestDoQPoolDialDoesNotBlockOtherEndpoints(t *testing.T) {

@@ -294,6 +294,32 @@ func TestComputeScore(t *testing.T) {
 			want: math.Inf(1),
 		},
 		{
+			name: "dotcom probe skipped by cancellation renormalises",
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       2,
+				Checks:             map[string]CheckState{"dotcom": Inconclusive},
+				DotcomSkipped:      true,
+			},
+			want: 10.0,
+		},
+		{
+			name: "dotcom check failed stays unrankable even if marked skipped",
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       2,
+				Checks:             map[string]CheckState{"dotcom": Fail},
+				DotcomSkipped:      true,
+			},
+			want: math.Inf(1),
+		},
+		{
 			name: "dotcom check disabled renormalises",
 			sr: ServerResult{
 				CachedLatencies:    []time.Duration{ms(10)},

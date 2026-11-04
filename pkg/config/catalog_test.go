@@ -174,23 +174,38 @@ func TestLegacyEndpointFallbacks(t *testing.T) {
 	}
 }
 
-func TestValidateChecks(t *testing.T) {
+func TestValidate(t *testing.T) {
+	valid := func(c Config) Config {
+		if c.OutputFormat == "" {
+			c.OutputFormat = "console"
+		}
+		if c.QueryType == "" {
+			c.QueryType = "A"
+		}
+		return c
+	}
 	tests := []struct {
 		name    string
 		cfg     Config
-		wantErr bool
+		wantErr string
 	}{
-		{"rebinding without domain", Config{CheckRebinding: true}, true},
-		{"rebinding with blank domain", Config{CheckRebinding: true, RebindingDomain: "  "}, true},
-		{"rebinding with domain", Config{CheckRebinding: true, RebindingDomain: "private.example.net"}, false},
-		{"domain without rebinding", Config{RebindingDomain: "private.example.net"}, false},
-		{"no checks", Config{}, false},
+		{"rebinding without domain", valid(Config{CheckRebinding: true}), "-rebinding-domain"},
+		{"rebinding with blank domain", valid(Config{CheckRebinding: true, RebindingDomain: "  "}), "-rebinding-domain"},
+		{"rebinding with domain", valid(Config{CheckRebinding: true, RebindingDomain: "private.example.net"}), ""},
+		{"domain without rebinding", valid(Config{RebindingDomain: "private.example.net"}), ""},
+		{"no checks", valid(Config{}), ""},
+		{"json format any case", valid(Config{OutputFormat: "JSON"}), ""},
+		{"csv format", valid(Config{OutputFormat: "csv"}), ""},
+		{"unknown format", valid(Config{OutputFormat: "jsn"}), "unknown output format"},
+		{"lower-case type", valid(Config{QueryType: "aaaa"}), ""},
+		{"misspelt type", valid(Config{QueryType: "AAA"}), "unknown -type"},
+		{"empty type", Config{OutputFormat: "console"}, "unknown -type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.validateChecks()
-			if tt.wantErr {
-				assert.ErrorContains(t, err, "-rebinding-domain")
+			err := tt.cfg.validate()
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
 			} else {
 				assert.NoError(t, err)
 			}

@@ -961,8 +961,12 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		return // Should not happen
 	}
 
-	// Skipped checks stay in their inconclusive (nil) state.
+	// Skipped checks stay in their inconclusive (nil) state. A skipped .com
+	// probe is recorded so that it does not make the server unrankable.
 	if res.skipped {
+		if res.checkType == "dotcom" {
+			serverResult.DotcomSkipped = true
+		}
 		return
 	}
 
@@ -1033,7 +1037,8 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		// and truncation stay inconclusive. Either way the server's score is
 		// +Inf (see analysis.computeScore) and it is not recommended (see
 		// output.findBestServer), so a failed probe cannot improve its standing
-		// by dropping out of the score.
+		// by dropping out of the score. Only a probe that was never sent
+		// (skipped above) is left out of the score.
 		if conclusiveResponse(res.result) {
 			if res.result.Response.Rcode == dns.RcodeNameError {
 				latency := res.result.Latency

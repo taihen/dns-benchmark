@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,9 +61,9 @@ func PrintConsoleResults(writer io.Writer, results *analysis.BenchmarkResults, c
 		return err
 	}
 
-	if writer == os.Stdout {
-		printSummary(out, serverResults, cfg)
-	}
+	// The summary carries the recommendation and the inconclusive/excluded
+	// warnings, so it is written wherever the table goes.
+	printSummary(out, serverResults, cfg)
 	return out.err
 }
 
@@ -188,10 +187,10 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 		formatReliability(res),
 	}
 	if cfg.CheckFiltering {
-		row = append(row, string(res.Checks["filtering"]))
+		row = append(row, formatCheckState(res.Checks["filtering"]))
 	}
 	if cfg.CheckDotcom {
-		row = append(row, formatDurationPointer(res.DotcomLatency))
+		row = append(row, formatDotcom(res))
 	}
 	if cfg.CheckDNSSEC {
 		row = append(row, formatBoolPointer(res.SupportsDNSSEC, "Yes", "No", "Inconclusive"))
@@ -425,9 +424,11 @@ func printConclusion(writer io.Writer, heading string, results []*analysis.Serve
 // findBestServer returns the recommended server: the eligible server with the
 // lowest composite Score. Reliability and DNS-failure rate are already folded
 // into Score. Two hard gates apply: accuracy (when -accuracy-file is set) and
-// the .com probe (when -dotcom is set), because a failed .com probe drops out
-// of Score rather than penalising it. Unrankable servers (+Inf score) are
-// skipped. Returns nil if no eligible server exists.
+// the .com probe (when -dotcom is set). A failed or inconclusive .com probe
+// already makes Score +Inf, but a probe skipped by cancellation is left out of
+// Score, so the gate is what keeps an unverified server from being
+// recommended. Unrankable servers (+Inf score) are skipped. Returns nil if no
+// eligible server exists.
 func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analysis.ServerResult {
 	var bestServer *analysis.ServerResult
 	for _, res := range results {
@@ -508,7 +509,11 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 			warn(".com probe did not return NXDOMAIN; excluded from recommendation.")
 		}
 		if cfg.CheckDotcom && res.Checks["dotcom"] == analysis.Inconclusive {
-			warn(".com probe was inconclusive; excluded from recommendation.")
+			if res.DotcomSkipped {
+				warn(".com probe was not sent before the run was interrupted; excluded from recommendation.")
+			} else {
+				warn(".com probe was inconclusive; excluded from recommendation.")
+			}
 		}
 	}
 
@@ -565,6 +570,30 @@ func formatScore(score float64) string {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.1f ms", score)
+}
+
+// formatDotcom formats the .com probe column: the latency when the probe
+// passed, otherwise the check state, so Fail and Inconclusive stay distinct.
+func formatDotcom(res *analysis.ServerResult) string {
+	if res.DotcomLatency != nil {
+		return formatDurationPointer(res.DotcomLatency)
+	}
+	return formatCheckState(res.Checks["dotcom"])
+}
+
+// formatCheckState formats a check state for console output, using the same
+// words as the other check columns.
+func formatCheckState(state analysis.CheckState) string {
+	switch state {
+	case analysis.Pass:
+		return "Pass"
+	case analysis.Fail:
+		return "Fail"
+	case analysis.Inconclusive:
+		return "Inconclusive"
+	default:
+		return "N/A"
+	}
 }
 
 // formatDurationPointer formats a duration pointer for console output.

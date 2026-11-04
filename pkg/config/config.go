@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
@@ -53,9 +55,11 @@ func (si ServerInfo) String() string {
 	return si.AddressString()
 }
 
-// AddressString returns the protocol-prefixed address format used before the
-// catalogue existed (for example "1.1.1.1:53", "tls://1.1.1.1:853" or a DoH URL).
-// It is reported as serverAddress in CSV, JSON and console output.
+// AddressString returns the protocol-prefixed address in the form accepted by
+// -f (for example "1.1.1.1:53", "tls://one.one.one.one:853" or a DoH URL).
+// DoT and DoQ use the catalogue TLS name when there is one, so IP-literal
+// forms such as "tls://9.9.9.9:853" only appear for custom entries. It is
+// reported as serverAddress in CSV, JSON and console output.
 func (si ServerInfo) AddressString() string {
 	switch si.Protocol {
 	case DOH:
@@ -198,7 +202,7 @@ func LoadConfig() *Config {
 		return cfg
 	}
 
-	if err := cfg.validateChecks(); err != nil {
+	if err := cfg.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -233,8 +237,18 @@ func LoadConfig() *Config {
 	return cfg
 }
 
-// validateChecks rejects check flags that cannot produce a conclusive result.
-func (cfg *Config) validateChecks() error {
+// validate rejects flag values that would otherwise only fail, or silently
+// change meaning, after the benchmark has run: an unknown output format, an
+// unknown query type, or a check that cannot produce a conclusive result.
+func (cfg *Config) validate() error {
+	switch strings.ToLower(cfg.OutputFormat) {
+	case "console", "csv", "json":
+	default:
+		return fmt.Errorf("unknown output format %q; use console, csv or json", cfg.OutputFormat)
+	}
+	if _, ok := dns.StringToType[strings.ToUpper(cfg.QueryType)]; !ok {
+		return fmt.Errorf("unknown -type %q; use a DNS record type such as A, AAAA, MX or TXT", cfg.QueryType)
+	}
 	if cfg.CheckRebinding && strings.TrimSpace(cfg.RebindingDomain) == "" {
 		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name with private A and/or AAAA records>")
 	}

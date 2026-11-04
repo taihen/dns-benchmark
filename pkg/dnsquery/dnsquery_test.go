@@ -1190,6 +1190,31 @@ func TestProcessCheckResult_DotcomNXDOMAIN(t *testing.T) {
 	assert.Equal(t, 18*time.Millisecond, *result.DotcomLatency)
 }
 
+func TestProcessCheckResult_SkippedDotcomIsRecorded(t *testing.T) {
+	tests := []struct {
+		name        string
+		checkType   string
+		wantSkipped bool
+	}{
+		{"skipped dotcom probe", "dotcom", true},
+		{"skipped dnssec probe", "dnssec", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverInfo := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP, Hostname: "1.1.1.1"}
+			benchmarker := NewBenchmarker(&config.Config{RateLimit: 0, Timeout: time.Second, CheckDotcom: true, CheckDNSSEC: true})
+			defer benchmarker.Close()
+			benchmarker.Results.Results[serverInfo.String()] = &analysis.ServerResult{ServerAddress: serverInfo.String()}
+
+			benchmarker.processCheckResult(queryJobResult{serverInfo: serverInfo, checkType: tt.checkType, skipped: true})
+
+			result := benchmarker.Results.Results[serverInfo.String()]
+			assert.Equal(t, tt.wantSkipped, result.DotcomSkipped)
+			assert.Nil(t, result.DotcomLatency)
+		})
+	}
+}
+
 func TestProcessCheckResult_DotcomFailureIsNotLatency(t *testing.T) {
 	tests := []struct {
 		name  string

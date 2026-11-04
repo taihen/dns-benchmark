@@ -44,9 +44,9 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 - **Metrics Measured:**
   - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
   - **Uncached Latency:** Average and Standard Deviation for resolving random names that are unique per endpoint and per run, so they are likely uncached.
-  - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
-  - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag). A server whose probe fails (any answer other than NXDOMAIN) or is inconclusive (timeout, transport error, truncation) is reported with a warning, gets no score (it ranks last) and is never recommended, since the missing sample would otherwise drop out of its score and flatter it.
-  - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when the .com check is disabled, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks catalogue results across providers within each transport and IP-family group, alongside each result's filtering policy. An unrankable server (no usable samples, or a failed or inconclusive `.com` probe with `-dotcom`) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
+  - **Reliability:** Percentage of latency probes that returned a complete, structurally valid DNS response. A truncated (TC) reply is incomplete, so it counts as a failed probe and lowers reliability and score; this mostly affects UDP with `-type` values that return large answers. Unexpected DNS rcodes are reported separately as DNS failures.
+  - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag). A server whose probe fails (any answer other than NXDOMAIN) or is inconclusive (timeout, transport error, truncation) is reported with a warning, gets no score (it ranks last) and is never recommended, since the missing sample would otherwise drop out of its score and flatter it. The console column shows `Fail` or `Inconclusive` for such a server. A probe that was never sent because the run was interrupted is left out of the score instead, but the server is still not recommended.
+  - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when the .com check is disabled, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks catalogue results across providers within each transport and IP-family group, alongside each result's filtering policy. An unrankable server (no usable samples, or a `.com` probe that was sent and failed or was inconclusive with `-dotcom`) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver rejects a deliberately broken signed domain, using a correctly signed control domain (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
@@ -59,13 +59,14 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
-  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed and inconclusive checks are warned about for every server, including the recommended one; the console shows `Inconclusive` for an enabled check without conclusive evidence.
+  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed and inconclusive checks are warned about for every server, including the recommended one; the console shows `Inconclusive` for an enabled check without conclusive evidence (the `.com Latency` column shows `Fail` or `Inconclusive` instead of a latency). The summary and warnings are written with the table, including with `-o`.
+  - Row order: custom and system endpoints come first, sorted by score, followed by catalogue endpoints grouped by transport and IP family (for example `DoH / ipv4`, then `DoT / ipv4`, then `UDP / ipv4`) and sorted by score within each group. The first row is not necessarily the fastest endpoint overall; use the recommendations or sort by score.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
 - **Interactive Runs:**
   - Live progress line on stderr when attached to a terminal.
-  - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score, shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
+  - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score (including an unsent `.com` probe), shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
   - Latency probes are interleaved across servers, so an interrupted run still has samples for every server.
 
 
@@ -103,8 +104,11 @@ separate policy group. Quad9 ECS variants retain their own ECS dimension.
 `legacy`, `general`, `security` and `family` presets, and to all five transports
 for `extended` and `-profile` selections. DoQ is distinct from HTTP/3; HTTP/3 and
 DNSCrypt are not implemented. `-ip-family auto` selects both families for explicit
-catalogue selections; the legacy default selects IPv4. DoH connects directly to
-its URL hostname using the selected family, without an HTTP proxy; DoT and DoQ
+catalogue selections; the legacy default selects IPv4, so its DoH and DoT
+endpoints are dialled over IPv4 only (use `-ip-family ipv6` on IPv6-only
+networks). DoH connects directly to its URL hostname using the selected family
+and ignores `HTTP_PROXY`/`HTTPS_PROXY`, so it does not work on networks that
+only allow outbound HTTPS through a proxy; DoT and DoQ
 connect to catalogue IPs while authenticating documented TLS hostnames.
 
 Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
@@ -167,8 +171,11 @@ envelope. Consumers that read the old array (for example `jq '.[0]'`) should rea
 `.results` instead:
 
 ```json
-{"schemaVersion":"2","metadata":{"startedAt":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":18,"interrupted":false},"results":[]}
+{"schemaVersion":"2","metadata":{"startedAt":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":20,"interrupted":false},"results":[...]}
 ```
+
+`warmupQueryCount` is one per benchmarked endpoint: 18 for the legacy catalogue
+endpoints plus each system resolver that is not already a catalogue endpoint.
 
 Each result includes provider, profile, roles, endpoint ID, family, transport,
 TLS name, catalogue version, source URLs, comparison group (empty for custom and
@@ -184,7 +191,7 @@ Machine-readable stdout contains only JSON or CSV; progress goes to stderr.
 
 Catalogue structure is validated on every load. Review freshness is a maintenance
 check: a scheduled CI workflow fails once an active entry is older than 366 days
-or dated in the future (run it locally with
+or dated more than a day in the future (run it locally with
 `DNSBENCH_CHECK_CATALOG_FRESHNESS=1 go test -run TestCatalogFreshness ./pkg/catalog`).
 It is not part of the per-PR test run, so an ageing catalogue does not block
 unrelated changes. The binary only prints a warning to stderr and keeps running. Deprecated entries are

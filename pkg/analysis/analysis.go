@@ -45,7 +45,7 @@ type ServerResult struct {
 	FilteringStates      []CheckState
 	ExtendedDNSErrors    []uint16
 	PolicyResponses      int
-	ServerAddress        string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	ServerAddress        string // Includes protocol prefix where applicable (e.g., tls://one.one.one.one:853)
 	Protocol             string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
 	CachedLatencies      []time.Duration
 	UncachedLatencies    []time.Duration
@@ -63,6 +63,10 @@ type ServerResult struct {
 	BlocksRebinding *bool
 	IsAccurate      *bool
 	DotcomLatency   *time.Duration
+	// DotcomSkipped records that the .com probe was never sent because the
+	// run was cancelled. The check stays Inconclusive, but computeScore leaves
+	// it out instead of making the server unrankable.
+	DotcomSkipped bool
 
 	// Calculated Metrics
 	AvgCachedLatency      time.Duration
@@ -170,12 +174,16 @@ func durationMs(d time.Duration) float64 {
 // reliability (probe success rate minus the wrong-rcode DNS-failure rate).
 // It returns math.Inf(1) when the server cannot be ranked: no latency samples,
 // no queries attempted, zero effective reliability, or an enabled .com check
-// that did not pass. Renormalising over the remaining weights in that last case
-// would let a server whose .com probe failed or timed out outscore one that
-// answered it slowly.
+// that was sent and did not pass. Renormalising over the remaining weights in
+// that last case would let a server whose .com probe failed or timed out
+// outscore one that answered it slowly. A probe that was never sent because
+// the run was cancelled (DotcomSkipped) says nothing about the server, so it
+// is left out of the score as if -dotcom were off.
 func computeScore(sr *ServerResult) float64 {
 	if state, ok := sr.Checks["dotcom"]; ok && state != NotApplicable && state != Pass {
-		return math.Inf(1)
+		if state != Inconclusive || !sr.DotcomSkipped {
+			return math.Inf(1)
+		}
 	}
 	var weightedSum, weightTotal float64
 	if len(sr.UncachedLatencies) > 0 {
