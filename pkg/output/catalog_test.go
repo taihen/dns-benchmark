@@ -139,3 +139,39 @@ func TestDefaultPresetRanksAcrossProviders(t *testing.T) {
 	assert.Equal(t, "DoH / ipv4", results[5].RankingGroup())
 	assert.Equal(t, "DoT / ipv4", results[6].RankingGroup())
 }
+
+// TestSummaryWhenGatesExcludeWholeGroups checks the summary when the .com gate
+// leaves no eligible server: a ranking group reports that nothing is rankable,
+// a policy group with no eligible member is omitted, and the uncatalogued
+// conclusion says no server could be recommended. A gated server must never be
+// named even when its score is the best in its group.
+func TestSummaryWhenGatesExcludeWholeGroups(t *testing.T) {
+	dotcom := 10 * time.Millisecond
+	catalogued := func(address, protocol, transport string, score float64, dotcomLatency *time.Duration) *analysis.ServerResult {
+		return &analysis.ServerResult{
+			ServerAddress: address, Protocol: protocol, Score: score, Reliability: 100, DotcomLatency: dotcomLatency,
+			Metadata: catalog.Metadata{Provider: address, Profile: address, Roles: []string{"general"}, FilteringPolicy: "unfiltered", ECS: "disabled", IPFamily: "ipv4", Transport: transport, CatalogVersion: "test"},
+		}
+	}
+	results := []*analysis.ServerResult{
+		catalogued("dot-a", "DoT", "dot", 1, nil),
+		catalogued("dot-b", "DoT", "dot", 2, nil),
+		catalogued("udp-gated", "UDP", "udp", 3, nil),
+		catalogued("udp-ok", "UDP", "udp", 5, &dotcom),
+		{ServerAddress: "custom-a:53", Protocol: "UDP", Score: 1, Reliability: 100},
+		{ServerAddress: "custom-b:53", Protocol: "UDP", Score: 2, Reliability: 100},
+	}
+
+	var buf bytes.Buffer
+	printSummary(&buf, results, &config.Config{CheckDotcom: true})
+	out := buf.String()
+
+	assert.Contains(t, out, "No rankable server for DoT / ipv4.")
+	assert.NotContains(t, out, "Fastest DoT")
+	assert.Contains(t, out, "Fastest UDP / ipv4: udp-ok (udp-ok, policy unfiltered), udp-ok")
+	assert.Contains(t, out, "Fastest unfiltered / general / disabled / UDP / ipv4: udp-ok")
+	assert.NotContains(t, out, "Fastest unfiltered / general / disabled / DoT / ipv4")
+	assert.NotContains(t, out, "udp-gated, score")
+	assert.Contains(t, out, "Could not determine a recommended server with a rankable composite score.")
+	assert.NotContains(t, out, "Recommended server: custom")
+}

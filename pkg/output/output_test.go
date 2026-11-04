@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -629,6 +630,71 @@ func TestSortServerResultsTieBreakByAddress(t *testing.T) {
 	sortServerResults(results)
 	assert.Equal(t, "a", results[0].ServerAddress)
 	assert.Equal(t, "b", results[1].ServerAddress)
+}
+
+// TestSortServerResultsTieBreakByEndpointID checks that endpoints sharing a
+// group, score and serverAddress (possible for IPv4 and IPv6 catalogue
+// endpoints) are ordered by endpoint ID, so output order is deterministic.
+func TestSortServerResultsTieBreakByEndpointID(t *testing.T) {
+	results := []*analysis.ServerResult{
+		{ServerAddress: "tls://one.one.one.one:853", Score: 10.0, Metadata: catalog.Metadata{EndpointID: "cf-b"}},
+		{ServerAddress: "tls://one.one.one.one:853", Score: 10.0, Metadata: catalog.Metadata{EndpointID: "cf-a"}},
+	}
+	sortServerResults(results)
+	assert.Equal(t, "cf-a", results[0].EndpointID)
+	assert.Equal(t, "cf-b", results[1].EndpointID)
+}
+
+// TestCheckStateColumnsAndJSONChecks pins each check state to its own CSV
+// column and JSON checks key. The two results use different state permutations
+// so swapping any two columns or keys changes at least one value.
+func TestCheckStateColumnsAndJSONChecks(t *testing.T) {
+	pass, fail, inconclusive, na := analysis.Pass, analysis.Fail, analysis.Inconclusive, analysis.NotApplicable
+	states := []map[string]analysis.CheckState{
+		{"dnssec": pass, "nxdomain": fail, "rebinding": inconclusive, "accuracy": na, "filtering": pass, "dotcom": fail},
+		{"dnssec": fail, "nxdomain": pass, "rebinding": na, "accuracy": inconclusive, "filtering": inconclusive, "dotcom": na},
+	}
+	columns := map[string]string{
+		"DNSSECState": "dnssec", "NXDOMAINState": "nxdomain", "RebindingState": "rebinding",
+		"AccuracyState": "accuracy", "FilteringState": "filtering", "DotcomState": "dotcom",
+	}
+	results := analysis.NewBenchmarkResults()
+	for i, checks := range states {
+		address := fmt.Sprintf("server-%d:53", i)
+		results.Results[address] = &analysis.ServerResult{ServerAddress: address, Protocol: "UDP", Score: float64(i + 1), Checks: checks}
+	}
+	cfg := &config.Config{}
+
+	var csvBuf bytes.Buffer
+	require.NoError(t, WriteCSVResults(&csvBuf, results, cfg))
+	records, err := csv.NewReader(&csvBuf).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 1+len(states))
+	index := map[string]int{}
+	for i, name := range records[0] {
+		index[name] = i
+	}
+	for row, checks := range states {
+		for column, check := range columns {
+			require.Contains(t, index, column)
+			assert.Equal(t, string(checks[check]), records[row+1][index[column]], "row %d column %s", row, column)
+		}
+	}
+
+	var jsonBuf bytes.Buffer
+	require.NoError(t, WriteJSONResults(&jsonBuf, results, cfg))
+	var report struct {
+		Results []struct {
+			ServerAddress string                         `json:"serverAddress"`
+			Checks        map[string]analysis.CheckState `json:"checks"`
+		} `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBuf.Bytes(), &report))
+	require.Len(t, report.Results, len(states))
+	for i, r := range report.Results {
+		assert.Equal(t, fmt.Sprintf("server-%d:53", i), r.ServerAddress)
+		assert.Equal(t, states[i], r.Checks)
+	}
 }
 
 func TestFindBestServer(t *testing.T) {
