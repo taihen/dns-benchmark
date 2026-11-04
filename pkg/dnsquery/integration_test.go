@@ -402,6 +402,19 @@ func TestTruncationIsNotScored(t *testing.T) {
 	assert.Empty(t, result.CachedLatencies)
 }
 
+// TestDoHClientIgnoresProxy pins that DoH dials the endpoint directly, so the
+// selected IP family is the one measured even when HTTP(S)_PROXY is set.
+func TestDoHClientIgnoresProxy(t *testing.T) {
+	for _, family := range []string{"ipv4", "ipv6", "auto"} {
+		t.Run(family, func(t *testing.T) {
+			client := newDoHClient(config.ServerInfo{Address: "https://resolver.fixture/dns-query", Metadata: catalog.Metadata{IPFamily: family}}, time.Second)
+			transport, ok := client.Transport.(*http.Transport)
+			require.True(t, ok)
+			assert.Nil(t, transport.Proxy, "DoH must not use a proxy from the environment")
+		})
+	}
+}
+
 func TestDoHPinnedTargetAndAuthenticationName(t *testing.T) {
 	certificate, roots := fixtureCertificate(t)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +467,8 @@ func TestFilteringProbeStates(t *testing.T) {
 }
 
 // serveDoQ answers every DoQ stream on listener with fixtureReply until ctx ends.
-func serveDoQ(ctx context.Context, listener *quic.Listener) {
+// serveDoQReplies answers every DoQ stream with the bytes built by reply.
+func serveDoQReplies(ctx context.Context, listener *quic.Listener, reply func(q *dns.Msg) ([]byte, error)) {
 	for {
 		connection, err := listener.Accept(ctx)
 		if err != nil {
@@ -480,12 +494,12 @@ func serveDoQ(ctx context.Context, listener *quic.Listener) {
 					if q.Unpack(packet) != nil {
 						return
 					}
-					reply, err := fixtureReply(q).Pack()
+					packed, err := reply(q)
 					if err != nil {
 						return
 					}
-					_ = binary.Write(stream, binary.BigEndian, uint16(len(reply)))
-					_, _ = stream.Write(reply)
+					_ = binary.Write(stream, binary.BigEndian, uint16(len(packed)))
+					_, _ = stream.Write(packed)
 				}()
 			}
 		}()
@@ -493,6 +507,13 @@ func serveDoQ(ctx context.Context, listener *quic.Listener) {
 }
 
 func startDoQFixture(t *testing.T) (string, *x509.CertPool) {
+	t.Helper()
+	return startDoQFixtureWith(t, func(q *dns.Msg) ([]byte, error) { return fixtureReply(q).Pack() })
+}
+
+// startDoQFixtureWith starts a loopback DoQ server whose replies are built by
+// reply, and returns its address and the roots that trust its certificate.
+func startDoQFixtureWith(t *testing.T, reply func(q *dns.Msg) ([]byte, error)) (string, *x509.CertPool) {
 	t.Helper()
 	certificate, roots := fixtureCertificate(t)
 	listener, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{"doq"}, MinVersion: tls.VersionTLS13}, nil)
@@ -502,8 +523,74 @@ func startDoQFixture(t *testing.T) (string, *x509.CertPool) {
 		cancel()
 		_ = listener.Close()
 	})
-	go serveDoQ(ctx, listener)
+	go serveDoQReplies(ctx, listener, reply)
 	return listener.Addr().String(), roots
+}
+
+// TestLocalDoQResponseValidation pins the checks that match a DoQ reply to
+// its query, as TestLocalDoHWireAndValidation does for DoH.
+func TestLocalDoQResponseValidation(t *testing.T) {
+	mutated := func(mutate func(*dns.Msg)) func(q *dns.Msg) ([]byte, error) {
+		return func(q *dns.Msg) ([]byte, error) {
+			reply := fixtureReply(q)
+			mutate(reply)
+			return reply.Pack()
+		}
+	}
+	tests := []struct {
+		name    string
+		reply   func(q *dns.Msg) ([]byte, error)
+		wantErr string
+	}{
+		{"not marked as a response", mutated(func(m *dns.Msg) { m.Response = false }), "not marked as a response"},
+		{"wrong ID", mutated(func(m *dns.Msg) { m.Id = 1 }), "ID mismatch"},
+		{"wrong question", mutated(func(m *dns.Msg) { m.Question[0].Name = "spoofed.test." }), "dns question mismatch"},
+		{"undecodable reply", func(*dns.Msg) ([]byte, error) { return []byte{0x00, 0x01, 0x02}, nil }, "failed to unpack DoQ response"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			address, roots := startDoQFixtureWith(t, tt.reply)
+			pool := newQuicConnectionPool()
+			defer pool.shutdownPool()
+			info := config.ServerInfo{Address: address, Hostname: "127.0.0.1", TLSRootCAs: roots, Metadata: catalog.Metadata{TLSServerName: "resolver.fixture"}}
+
+			result := performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 2*time.Second, pool)
+
+			require.Error(t, result.Error)
+			assert.ErrorContains(t, result.Error, tt.wantErr)
+		})
+	}
+}
+
+// TestDoQForcedFamilyPinsResolvedAddress checks that a DoQ hostname with a
+// forced IP family is resolved once and every query reuses that address, and
+// therefore the same pooled session.
+func TestDoQForcedFamilyPinsResolvedAddress(t *testing.T) {
+	address, roots := startDoQFixture(t)
+	_, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	pool := newQuicConnectionPool()
+	defer pool.shutdownPool()
+	info := config.ServerInfo{
+		Address: net.JoinHostPort("localhost", port), Hostname: "localhost", TLSRootCAs: roots,
+		Metadata: catalog.Metadata{TLSServerName: "resolver.fixture", IPFamily: "ipv4"},
+	}
+
+	for range 3 {
+		result := performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 2*time.Second, pool)
+		require.NoError(t, result.Error)
+	}
+
+	pool.resolvedMu.Lock()
+	pinned := pool.resolved["ip4|"+info.Address]
+	pool.resolvedMu.Unlock()
+	assert.Equal(t, address, pinned)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	assert.Len(t, pool.connections, 1, "all queries must share one pool key")
+	for _, conns := range pool.connections {
+		assert.Len(t, conns, 1, "all queries must share one session")
+	}
 }
 
 // TestDoQAuthenticatesTLSServerName checks that a DoQ endpoint is verified

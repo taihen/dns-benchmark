@@ -207,8 +207,9 @@ func buildRow(res *analysis.ServerResult, cfg *config.Config) []string {
 	return append(row, res.Provider, res.Profile, strings.Join(res.Roles, ";"), res.IPFamily, res.TLSServerName, res.FilteringPolicy, strconv.Itoa(res.TruncatedResponses))
 }
 
-// buildCSVHeader constructs the header row for CSV output.
-// It includes all possible fields for benchmark results in CSV format.
+// buildCSVHeader constructs the header row for CSV output: the fixed metric
+// columns, columns for the enabled checks, then the identity and probe-state
+// columns.
 func buildCSVHeader(cfg *config.Config) []string {
 	header := []string{
 		"ServerAddress",
@@ -665,6 +666,13 @@ type JSONReport struct {
 // summarised together with the original single "Conclusion"; a run made only of
 // such endpoints prints exactly that.
 func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
+	// Printed once, after every group's warnings. cfg is read when the
+	// deferred call runs, so a rebinding check suppressed below is ignored.
+	defer func() {
+		if !cfg.Verbose && anyInconclusive(results, cfg) {
+			_, _ = fmt.Fprintln(writer, "Note: inconclusive checks got no usable answer (timeout, SERVFAIL, REFUSED, truncation or an interrupted run); run with -v for per-probe details.")
+		}
+	}()
 	if rebindingUnverified(results, cfg) {
 		// Every server is inconclusive for the same run-level reason, so one
 		// note replaces a rebinding warning per server in every group.
@@ -721,6 +729,23 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 	}
 
 	printConclusion(writer, "\n--- Conclusion (system and custom endpoints, no catalogue policy) ---", uncatalogued, cfg)
+}
+
+// anyInconclusive reports whether any enabled check was inconclusive for any
+// server, matching the per-server "inconclusive" warnings.
+func anyInconclusive(results []*analysis.ServerResult, cfg *config.Config) bool {
+	enabled := map[string]bool{
+		"dnssec": cfg.CheckDNSSEC, "nxdomain": cfg.CheckNXDOMAIN, "rebinding": cfg.CheckRebinding,
+		"filtering": cfg.CheckFiltering, "accuracy": cfg.AccuracyCheckFile != "", "dotcom": cfg.CheckDotcom,
+	}
+	for _, res := range results {
+		for name, on := range enabled {
+			if on && res.Checks[name] == analysis.Inconclusive {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rebindingUnverified reports whether the rebinding check ran but no server

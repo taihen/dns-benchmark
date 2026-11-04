@@ -53,20 +53,20 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **DNS Rebinding Protection:** Checks if the resolver strips private A and AAAA answers (`-rebinding` flag, default: false; requires `-rebinding-domain`). Confirming protection needs at least one tested resolver that passes the private answer through.
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag). A missing or unreadable file, or one with no valid entry, is an error.
 - **Configuration:**
-  - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
+  - Use the built-in resolver catalogue. The default `legacy` preset covers Cloudflare, Google, Quad9, OpenDNS, AdGuard and DNS4EU; other presets and `-profile` add Control D, CleanBrowsing, DNS.SB and DNS.WATCH.
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
-  - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
-  - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
+  - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used). A `-transports` list without `udp` leaves them out.
+  - Adjust number of queries (`-n`, default: 50), timeout (`-t`, must be positive), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
   - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed and inconclusive checks are warned about for every server, including the recommended one; the console shows `Inconclusive` for an enabled check without conclusive evidence (the `.com Latency` column shows `Fail` or `Inconclusive` instead of a latency). The summary and warnings are written with the table, including with `-o`.
   - Row order: custom and system endpoints come first, sorted by score, followed by catalogue endpoints grouped by transport and IP family (for example `DoH / ipv4`, then `DoT / ipv4`, then `UDP / ipv4`) and sorted by score within each group. The first row is not necessarily the fastest endpoint overall; use the recommendations or sort by score.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
-  - Option to write output to a file (`-o <filename>`).
+  - Option to write output to a file (`-o <filename>`). The path is opened before the benchmark starts, so an unwritable path fails immediately; an existing file is replaced only once results are ready.
 - **Interactive Runs:**
   - Live progress line on stderr when attached to a terminal.
-  - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score (including an unsent `.com` probe), shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
+  - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score (including an unsent `.com` probe), skipped latency probes are shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
   - Latency probes are interleaved across servers, so an interrupted run still has samples for every server.
 
 
@@ -122,6 +122,10 @@ instead of being repaired with a warning: `http://` entries, ports outside 1–6
 `host:1:2`, and DoH URLs with user info (`https://user@host/...`), a `#fragment`,
 or an out-of-range port. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
+`-transports` and `-ip-family` also filter `-f` entries: IP literals of the other
+family are skipped (with a warning naming the count), and hostnames are dialled
+over the selected family. A DoQ hostname is resolved once and the first address
+is reused for the rest of the run.
 System resolvers that are already selected catalogue endpoints (for example
 `1.1.1.1`) are benchmarked once, as the catalogue entry.
 
@@ -135,7 +139,7 @@ It is not scored, it goes through the rate limiter, and the total is reported as
 `warmupQueryCount`. Without it, the first cached sample would carry the DoH/DoQ
 handshake and possibly the cache miss that fills the resolver cache. Later DoQ
 queries, including concurrent ones, share the warmed QUIC session on separate
-streams; DoH reuses the client's keep-alive connections (HTTP/2 multiplexes
+streams for the whole run (a session is only dropped after 15 s without use); DoH reuses the client's keep-alive connections (HTTP/2 multiplexes
 concurrent requests), though with HTTP/1.1 a concurrent request may still open a
 new connection. DoT and TCP open a connection per query, so their samples
 always include connection setup. All probes use

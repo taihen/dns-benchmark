@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,13 +137,29 @@ func TestLegacyFileSelectionErrors(t *testing.T) {
 }
 
 func TestRejectMalformedEndpoints(t *testing.T) {
-	for _, entry := range []string{
-		"http://dns.example", "1.1.1.1:0", "1.1.1.1:65536", "[::1",
-		"[1.1.1.1]", "[1.1.1.1]:53", "tls://[1.1.1.1]:853", "[1.1.1.1]:bad", "[dns.example]:53",
-		"host.example:1:2",
-		"https://dns.example:65536/dns-query", "https://user:pass@dns.example/dns-query", "https://dns.example/dns-query#frag",
-	} {
-		t.Run(entry, func(t *testing.T) { _, err := parseServerString(entry); assert.Error(t, err) })
+	tests := []struct {
+		entry   string
+		wantErr string
+	}{
+		{"http://dns.example", "DoH requires https"},
+		{"1.1.1.1:0", "invalid port"},
+		{"1.1.1.1:65536", "invalid port"},
+		{"[::1", "invalid address or port"},
+		{"[1.1.1.1]", "invalid bracketed IPv6"},
+		{"[1.1.1.1]:53", "invalid bracketed IPv6"},
+		{"tls://[1.1.1.1]:853", "invalid bracketed IPv6"},
+		{"[1.1.1.1]:bad", "invalid bracketed IPv6"},
+		{"[dns.example]:53", "invalid bracketed IPv6"},
+		{"host.example:1:2", "invalid address or port"},
+		{"https://dns.example:65536/dns-query", "invalid port"},
+		{"https://user:pass@dns.example/dns-query", "invalid DoH URL"},
+		{"https://dns.example/dns-query#frag", "invalid DoH URL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			_, err := parseServerString(tt.entry)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
 	}
 }
 
@@ -182,6 +199,9 @@ func TestValidate(t *testing.T) {
 		if c.QueryType == "" {
 			c.QueryType = "A"
 		}
+		if c.Timeout == 0 {
+			c.Timeout = 5 * time.Second
+		}
 		return c
 	}
 	tests := []struct {
@@ -199,7 +219,9 @@ func TestValidate(t *testing.T) {
 		{"unknown format", valid(Config{OutputFormat: "jsn"}), "unknown output format"},
 		{"lower-case type", valid(Config{QueryType: "aaaa"}), ""},
 		{"misspelt type", valid(Config{QueryType: "AAA"}), "unknown -type"},
-		{"empty type", Config{OutputFormat: "console"}, "unknown -type"},
+		{"empty type", Config{OutputFormat: "console", Timeout: time.Second}, "unknown -type"},
+		{"zero timeout", Config{OutputFormat: "console", QueryType: "A"}, "-t must be a positive duration"},
+		{"negative timeout", valid(Config{Timeout: -time.Second}), "-t must be a positive duration"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,4 +259,37 @@ func TestDefaultDNSStringsPopulated(t *testing.T) {
 	entries, err := DefaultDNSStrings()
 	require.NoError(t, err)
 	assert.Len(t, entries, 18)
+}
+
+// TestServersFileFilteredByFamilyAndTransport checks that -ip-family and
+// -transports also filter -f entries, and that hostnames take the forced family.
+func TestServersFileFilteredByFamilyAndTransport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "servers.txt")
+	require.NoError(t, os.WriteFile(path, []byte("1.1.1.1\n2606:4700:4700::1111\ntls://dns.example\nquic://dns.example\n"), 0o600))
+	tests := []struct {
+		name       string
+		family     string
+		transports string
+		want       []string
+		wantFamily string
+	}{
+		{"auto keeps everything", "auto", "", []string{"1.1.1.1:53", "[2606:4700:4700::1111]:53", "tls://dns.example:853", "quic://dns.example:853"}, ""},
+		{"ipv4 drops IPv6 literals and pins hostnames", "ipv4", "", []string{"1.1.1.1:53", "tls://dns.example:853", "quic://dns.example:853"}, "ipv4"},
+		{"ipv6 drops IPv4 literals", "ipv6", "", []string{"[2606:4700:4700::1111]:53", "tls://dns.example:853", "quic://dns.example:853"}, "ipv6"},
+		{"transports filter", "auto", "dot,doq", []string{"tls://dns.example:853", "quic://dns.example:853"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{ServersFile: path, IPFamily: tt.family, Transports: tt.transports}
+			require.NoError(t, cfg.LoadServers())
+			var got []string
+			for _, s := range cfg.Servers {
+				got = append(got, s.AddressString())
+				if tt.wantFamily != "" {
+					assert.Equal(t, tt.wantFamily, s.IPFamily, s.AddressString())
+				}
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

@@ -46,14 +46,21 @@ const (
 
 	dotcomCheckPrefix = "dnsbench-dotcom-"
 	dotcomCheckSuffix = ".com."
-	// uncachedQuerySuffix is the zone for random uncached latency names.
+	// uncachedQuerySuffix is the zone for random uncached latency names. Those
+	// names reuse nxdomainCheckDomainPrefix as their label prefix, so changing
+	// that prefix also changes the latency query names.
 	uncachedQuerySuffix = ".net."
 	dohUserAgent        = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
 
-	// QUIC connection pool configuration
+	// QUIC connection pool configuration. Live sessions are kept for as long
+	// as they are in use, so long runs do not pay a fresh handshake inside
+	// timed queries; only closed sessions and those idle for maxIdleTime are
+	// removed.
 	maxPooledConnections = 10
-	connectionTTL        = 30 * time.Second
 	maxIdleTime          = 15 * time.Second
+	// maxDoQDialTime caps a DoQ dial in addition to the -t handshake idle
+	// timeout.
+	maxDoQDialTime = 10 * time.Second
 )
 
 // QueryResult holds the result of a single DNS query.
@@ -89,6 +96,8 @@ type quicConnectionPool struct {
 	mu           sync.RWMutex
 	connections  map[string][]*quicConnection // key: serverAddress|serverName
 	dialing      map[string]int               // in-flight dials reserving pool slots
+	resolvedMu   sync.Mutex
+	resolved     map[string]string // network|host:port -> pinned ip:port
 	closed       bool
 	cleanup      chan struct{}
 	cleanupDone  chan struct{}
@@ -99,6 +108,7 @@ func newQuicConnectionPool() *quicConnectionPool {
 	pool := &quicConnectionPool{
 		connections: make(map[string][]*quicConnection),
 		dialing:     make(map[string]int),
+		resolved:    make(map[string]string),
 		cleanup:     make(chan struct{}),
 		cleanupDone: make(chan struct{}),
 	}
@@ -123,7 +133,9 @@ func (p *quicConnectionPool) startCleanup() {
 	}
 }
 
-// cleanupStaleConnections removes expired and idle connections
+// cleanupStaleConnections removes closed connections and connections that
+// have been idle for longer than maxIdleTime. Sessions are not aged out while
+// they are still being used, so a long run keeps its warmed sessions.
 func (p *quicConnectionPool) cleanupStaleConnections() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -133,10 +145,10 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 		var activeConns []*quicConnection
 
 		for _, conn := range conns {
-			// Remove connections that are too old or have been idle too long
-			if conn.streams == 0 &&
-				(now.Sub(conn.createdAt) > connectionTTL ||
-					now.Sub(conn.lastUsed) > maxIdleTime) {
+			if sessionClosed(conn.session) {
+				continue
+			}
+			if conn.streams == 0 && now.Sub(conn.lastUsed) > maxIdleTime {
 				if conn.session != nil {
 					_ = conn.session.CloseWithError(0, "cleanup")
 				}
@@ -153,6 +165,19 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 	}
 }
 
+// sessionClosed reports whether a pooled QUIC session has terminated.
+func sessionClosed(session *quic.Conn) bool {
+	if session == nil {
+		return false
+	}
+	select {
+	case <-session.Context().Done():
+		return true
+	default:
+		return false
+	}
+}
+
 // getConnection retrieves or creates a QUIC connection for the server.
 // A live pooled session is shared by concurrent queries, each on its own
 // stream, so the session opened by the warm-up query serves the scored
@@ -161,7 +186,8 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 // never held while dialling, so an unreachable endpoint cannot delay queries
 // to other endpoints; in-flight dials reserve pool slots to keep the limit.
 // handshakeTimeout bounds the QUIC handshake idle time so the user's -t timeout
-// applies instead of quic-go's 5s default.
+// applies instead of quic-go's 5s default; the whole dial is additionally
+// capped at maxDoQDialTime.
 func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config, handshakeTimeout time.Duration) (*quic.Conn, bool, error) {
 	key := serverAddr + "|" + tlsConfig.ServerName
 
@@ -186,7 +212,7 @@ func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr strin
 	}
 	p.mu.Unlock()
 
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, maxDoQDialTime)
 	defer cancel()
 	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, &quic.Config{HandshakeIdleTimeout: handshakeTimeout})
 
@@ -389,6 +415,59 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	return QueryResult{Latency: time.Since(startTime), Response: response, Error: nil}
 }
 
+// resolveForFamily returns the address to dial for a DoQ endpoint. Endpoints
+// with an IP literal, or without a forced IP family, are dialled as given.
+// A hostname with a forced family is resolved once with the system resolver
+// and the first address is reused for later queries; failures are not cached.
+func (p *quicConnectionPool) resolveForFamily(ctx context.Context, serverInfo config.ServerInfo, timeout time.Duration) (string, error) {
+	address := serverInfo.Address
+	if serverInfo.IPFamily != "ipv4" && serverInfo.IPFamily != "ipv6" {
+		return address, nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("doq invalid address %s: %w", address, err)
+	}
+	if net.ParseIP(host) != nil {
+		return address, nil
+	}
+	network := "ip4"
+	if serverInfo.IPFamily == "ipv6" {
+		network = "ip6"
+	}
+	key := network + "|" + address
+
+	p.resolvedMu.Lock()
+	pinned, ok := p.resolved[key]
+	p.resolvedMu.Unlock()
+	if ok {
+		return pinned, nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIP(lookupCtx, network, host)
+	if err != nil {
+		return "", fmt.Errorf("doq could not resolve %s for %s: %w", host, serverInfo.IPFamily, err)
+	}
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("doq could not resolve %s: no %s address", host, network)
+	}
+	pinned = net.JoinHostPort(addresses[0].String(), port)
+
+	p.resolvedMu.Lock()
+	if p.resolved == nil {
+		p.resolved = make(map[string]string)
+	}
+	if existing, ok := p.resolved[key]; ok {
+		pinned = existing
+	} else {
+		p.resolved[key] = pinned
+	}
+	p.resolvedMu.Unlock()
+	return pinned, nil
+}
+
 // performDoQQuery performs a DNS query over QUIC (DoQ).
 // It uses connection pooling to reuse QUIC sessions for better performance.
 func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
@@ -409,32 +488,18 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		MinVersion: tls.VersionTLS13,
 	}
 
+	// Hostname resolution for a forced family happens before the query
+	// timeout and clock start: it measures the system resolver, not the DoQ
+	// endpoint. The first address is pinned for the rest of the run so that
+	// every query reuses the same pooled session.
+	serverAddress, err := pool.resolveForFamily(ctx, serverInfo, timeout)
+	if err != nil {
+		return QueryResult{Error: err}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Hostname resolution for a forced family happens before the clock starts:
-	// it measures the system resolver, not the DoQ endpoint.
-	serverAddress := serverInfo.Address
-	if serverInfo.IPFamily == "ipv4" || serverInfo.IPFamily == "ipv6" {
-		host, port, err := net.SplitHostPort(serverAddress)
-		if err != nil {
-			return QueryResult{Error: err}
-		}
-		if net.ParseIP(host) == nil {
-			network := "ip4"
-			if serverInfo.IPFamily == "ipv6" {
-				network = "ip6"
-			}
-			addresses, err := net.DefaultResolver.LookupIP(ctx, network, host)
-			if err != nil {
-				return QueryResult{Error: err}
-			}
-			if len(addresses) == 0 {
-				return QueryResult{Error: fmt.Errorf("no %s address for %s", network, host)}
-			}
-			serverAddress = net.JoinHostPort(addresses[0].String(), port)
-		}
-	}
 	startTime := time.Now()
 	// Get QUIC connection from pool
 	session, pooled, err := pool.getConnection(ctx, serverAddress, tlsConfig, timeout)

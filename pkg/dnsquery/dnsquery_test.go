@@ -1388,6 +1388,22 @@ func TestQuicConnectionPool(t *testing.T) {
 		testPool.mu.Unlock()
 	})
 
+	t.Run("cleanup keeps old sessions that are still in use", func(t *testing.T) {
+		serverAddr := "test3.example.com:853"
+		testPool.mu.Lock()
+		testPool.connections[serverAddr] = []*quicConnection{{
+			lastUsed:  time.Now(),
+			createdAt: time.Now().Add(-2 * time.Hour),
+		}}
+		testPool.mu.Unlock()
+
+		testPool.cleanupStaleConnections()
+
+		testPool.mu.Lock()
+		assert.Len(t, testPool.connections[serverAddr], 1, "a recently used session must not be aged out")
+		testPool.mu.Unlock()
+	})
+
 	t.Run("shutdown pool", func(t *testing.T) {
 		// Create a separate test pool for shutdown test
 		shutdownTestPool := &quicConnectionPool{

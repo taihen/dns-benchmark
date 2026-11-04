@@ -41,8 +41,11 @@ type ServerInfo struct {
 	TLSRootCAs *x509.CertPool
 	Address    string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
 	Protocol   ProtocolType
-	Hostname   string // Hostname for TLS SNI / DoH URL host. Should NOT contain brackets for IPv6.
-	DoHPath    string // Path for DoH endpoint (e.g., /dns-query).
+	// Hostname is the host part of Address (an IP literal or a name), or the
+	// DoH URL host, without IPv6 brackets. It is used for TLS SNI only when
+	// Metadata.TLSServerName is empty, as for custom -f entries.
+	Hostname string
+	DoHPath  string // Path for DoH endpoint (e.g., /dns-query).
 }
 
 // String returns the unique identity of an endpoint, used as the results key and
@@ -115,10 +118,18 @@ var resolvConfNameserverRegex = regexp.MustCompile(`^\s*nameserver\s+([^\s]+)\s*
 
 // Config holds the application configuration derived from flags and files.
 type Config struct {
-	Preset              string
-	Profiles            string
-	Transports          string
-	IPFamily            string
+	// Preset selects catalogue profiles: legacy, general, security, family
+	// or extended.
+	Preset string
+	// Profiles is a comma-separated list of catalogue profile IDs; it
+	// overrides Preset.
+	Profiles string
+	// Transports is a comma-separated transport filter (udp,tcp,dot,doh,doq).
+	Transports string
+	// IPFamily is ipv4, ipv6 or auto.
+	IPFamily string
+	// RebindingDomain is a controlled name with private A/AAAA records,
+	// required by CheckRebinding.
 	RebindingDomain     string
 	ServersFile         string
 	Servers             []ServerInfo
@@ -129,7 +140,7 @@ type Config struct {
 	QueryType           string
 	Domain              string // Domain for cached latency tests
 	CheckDNSSEC         bool
-	CheckFiltering      bool
+	CheckFiltering      bool // Run documented provider filtering probes.
 	CheckNXDOMAIN       bool
 	Verbose             bool
 	OutputFile          string
@@ -185,7 +196,7 @@ func LoadConfig() *Config {
 		"Path to file for accuracy check (domain IP[,IP...] per line, uses first valid entry)",
 	)
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose output")
-	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (CSV/JSON)")
+	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (console, CSV or JSON output)")
 	flag.StringVar(&cfg.OutputFormat, "format", "console", "Output format (console, csv, json)")
 	flag.BoolVar(&cfg.IncludeSystemDNS, "system", true, "Include system DNS servers (UDP only)")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
@@ -239,8 +250,12 @@ func LoadConfig() *Config {
 
 // validate rejects flag values that would otherwise only fail, or silently
 // change meaning, after the benchmark has run: an unknown output format, an
-// unknown query type, or a check that cannot produce a conclusive result.
+// unknown query type, a non-positive timeout, or a check that cannot produce
+// a conclusive result.
 func (cfg *Config) validate() error {
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("-t must be a positive duration such as 5s, got %s", cfg.Timeout)
+	}
 	switch strings.ToLower(cfg.OutputFormat) {
 	case "console", "csv", "json":
 	default:

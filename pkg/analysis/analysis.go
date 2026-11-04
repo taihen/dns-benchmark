@@ -37,25 +37,37 @@ const (
 // ServerResult holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
 	catalog.Metadata
-	Checks               map[string]CheckState
-	TruncatedResponses   int
-	NXDOMAINProbes       int
+	// Checks holds the state of each check keyed by name ("dnssec",
+	// "nxdomain", "rebinding", "accuracy", "filtering", "dotcom").
+	Checks map[string]CheckState
+	// TruncatedResponses counts replies with the TC bit set; a truncated
+	// latency reply counts as a failed query.
+	TruncatedResponses int
+	// NXDOMAINProbes counts NXDOMAIN hijack probes answered so far.
+	NXDOMAINProbes int
+	// NXDOMAINInconclusive is set when any NXDOMAIN probe lacked a usable answer.
 	NXDOMAINInconclusive bool
-	FilteringProbes      int
-	FilteringStates      []CheckState
-	ExtendedDNSErrors    []uint16
-	PolicyResponses      int
-	ServerAddress        string // Includes protocol prefix where applicable (e.g., tls://one.one.one.one:853)
-	Protocol             string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
-	CachedLatencies      []time.Duration
-	UncachedLatencies    []time.Duration
-	Errors               int // Latency probes without a complete, structurally valid response
-	TotalQueries         int // Total number of latency queries scheduled
-	Skipped              int // Latency queries skipped due to cancellation (not attempted)
-	TimeoutErrors        int
-	TransportErrors      int
-	DNSFailures          int
-	MalformedResponses   int
+	// FilteringProbes counts filtering probes answered so far.
+	FilteringProbes int
+	// FilteringStates holds the outcome of each filtering probe.
+	FilteringStates []CheckState
+	// ExtendedDNSErrors lists every Extended DNS Error info code (RFC 8914)
+	// seen in this server's replies.
+	ExtendedDNSErrors []uint16
+	// PolicyResponses counts replies carrying a policy Extended DNS Error:
+	// 15 Blocked, 16 Censored, 17 Filtered or 18 Prohibited.
+	PolicyResponses    int
+	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://one.one.one.one:853)
+	Protocol           string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
+	CachedLatencies    []time.Duration
+	UncachedLatencies  []time.Duration
+	Errors             int // Latency probes without a complete, structurally valid response
+	TotalQueries       int // Total number of latency queries scheduled
+	Skipped            int // Latency queries skipped due to cancellation (not attempted)
+	TimeoutErrors      int
+	TransportErrors    int
+	DNSFailures        int
+	MalformedResponses int
 
 	// Check Results (pointers allow nil state for unchecked/error)
 	SupportsDNSSEC  *bool

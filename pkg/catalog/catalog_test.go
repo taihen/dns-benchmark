@@ -52,6 +52,34 @@ func TestCatalogRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
+func TestCatalogDoHPortMatchesURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		port    int
+		wantErr string
+	}{
+		{"default port", "https://cloudflare-dns.com/dns-query", 443, ""},
+		{"explicit matching port", "https://cloudflare-dns.com:8443/dns-query", 8443, ""},
+		{"port field differs from implied 443", "https://cloudflare-dns.com/dns-query", 8443, "does not match port"},
+		{"URL port differs from port field", "https://cloudflare-dns.com:8443/dns-query", 443, "does not match port"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load()
+			require.NoError(t, err)
+			endpoint := &c.Profiles[0].Endpoints[3]
+			require.Equal(t, "doh", endpoint.Protocol)
+			endpoint.URL, endpoint.Port = tt.url, tt.port
+			if tt.wantErr == "" {
+				assert.NoError(t, c.Validate())
+				return
+			}
+			assert.ErrorContains(t, c.Validate(), tt.wantErr)
+		})
+	}
+}
+
 // TestCatalogFreshness depends on the wall clock, so it only runs when
 // DNSBENCH_CHECK_CATALOG_FRESHNESS is set (see the scheduled catalogue-freshness
 // workflow). Running it on every PR would start failing unrelated changes once

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -36,8 +37,10 @@ type ResolverProfile struct {
 	Endpoints             []Endpoint `json:"endpoints"`
 	SourceURLs            []string   `json:"sourceURLs"`
 	LastVerified          string     `json:"lastVerified"`
-	Status                string     `json:"status"`
-	Legacy                bool       `json:"legacy,omitempty"`
+	// Status is "active" or "deprecated"; deprecated profiles are never selected.
+	Status string `json:"status"`
+	// Legacy marks profiles that belong to the default legacy preset.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 // Endpoint separates a connection target from its authenticated TLS name.
@@ -174,6 +177,16 @@ func (c *Catalog) Validate() error {
 				u, err := url.Parse(e.URL)
 				if err != nil || u.Scheme != "https" || u.Hostname() != e.TLSServerName || u.Path == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
 					return fmt.Errorf("invalid DoH URL for %s", e.ID)
+				}
+				urlPort := 443
+				if u.Port() != "" {
+					urlPort, err = strconv.Atoi(u.Port())
+					if err != nil {
+						return fmt.Errorf("invalid DoH URL port for %s", e.ID)
+					}
+				}
+				if urlPort != e.Port {
+					return fmt.Errorf("DoH URL port %d does not match port %d for %s", urlPort, e.Port, e.ID)
 				}
 			}
 		}

@@ -24,8 +24,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install dependencies
-        run: go mod tidy
+      - name: Verify go.mod and go.sum are tidy
+        run: go mod tidy -diff
 
       - name: Build binaries
         id: build

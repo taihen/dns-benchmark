@@ -102,6 +102,10 @@ func TestInvalidFlagsFailBeforeTouchingOutputFile(t *testing.T) {
 	}{
 		{"unknown format", []string{"-format", "jsn"}, "unknown output format"},
 		{"unknown query type", []string{"-type", "AAA"}, "unknown -type"},
+		{"zero timeout", []string{"-t", "0s"}, "-t must be a positive duration"},
+		{"rebinding without domain", []string{"-rebinding"}, "-rebinding requires -rebinding-domain"},
+		{"missing accuracy file", []string{"-accuracy-file", "/nonexistent/accuracy.txt"}, "could not load accuracy check file"},
+		{"accuracy file without a valid entry", []string{"-accuracy-file", "EMPTY_ACCURACY_FILE"}, "could not load accuracy check file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,6 +115,12 @@ func TestInvalidFlagsFailBeforeTouchingOutputFile(t *testing.T) {
 			// The servers file points at an unused address: validation must fail
 			// before any query is sent.
 			args := append([]string{"-f", writeServersFile(t, "192.0.2.1"), "-system=false", "-o", output}, tt.args...)
+			for i, arg := range args {
+				if arg == "EMPTY_ACCURACY_FILE" {
+					args[i] = filepath.Join(t.TempDir(), "accuracy.txt")
+					require.NoError(t, os.WriteFile(args[i], []byte("# no entries\n"), 0o600))
+				}
+			}
 			stdout, stderr, code := runCommand(t, args...)
 
 			assert.Equal(t, 1, code)
@@ -122,4 +132,31 @@ func TestInvalidFlagsFailBeforeTouchingOutputFile(t *testing.T) {
 			assert.Equal(t, "previous results", string(content), "an existing output file must not be truncated")
 		})
 	}
+}
+
+func TestUnwritableOutputFailsBeforeBenchmark(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "missing-dir", "results.json")
+
+	stdout, stderr, code := runCommand(t, "-f", writeServersFile(t, "192.0.2.1"), "-system=false", "-o", output)
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "Error opening output file")
+	assert.NotContains(t, stderr, "Running benchmark", "an unwritable output path must fail before the benchmark starts")
+}
+
+func TestOutputFileReplacesPreviousContents(t *testing.T) {
+	servers := writeServersFile(t, startUDPFixture(t))
+	output := filepath.Join(t.TempDir(), "results.json")
+	// Longer than the new report, so leftover bytes would break the JSON.
+	require.NoError(t, os.WriteFile(output, bytes.Repeat([]byte("x"), 1<<20), 0o600))
+
+	_, stderr, code := runCommand(t, "-f", servers, "-system=false", "-n", "2", "-rate", "0", "-format", "json", "-o", output)
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	content, err := os.ReadFile(output)
+	require.NoError(t, err)
+	var report map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(content, &report), "the output file must hold only the new report")
+	assert.Contains(t, report, "results")
 }

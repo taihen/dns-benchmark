@@ -32,6 +32,23 @@ func run() int {
 		return 0
 	}
 
+	// Open the output file before the benchmark so that an unwritable path
+	// fails immediately instead of discarding a completed run. The file is
+	// not truncated until the results are ready, so an existing file keeps
+	// its contents if the run is aborted.
+	outputWriter := os.Stdout
+	if cfg.OutputFile != "" {
+		file, err := os.OpenFile(cfg.OutputFile, os.O_WRONLY|os.O_CREATE, 0o666)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening output file %s: %v\n", cfg.OutputFile, err)
+			return 1
+		}
+		outputWriter = file
+		// Closed explicitly below so that a failed final flush is reported;
+		// this deferred close only covers early returns.
+		defer func() { _ = outputWriter.Close() }()
+	}
+
 	// Cancel the benchmark on Ctrl+C / SIGTERM; results collected so far are
 	// still analyzed and reported.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -57,20 +74,14 @@ func run() int {
 	// Analyze the results (calculate derived metrics like averages, stddev, reliability)
 	results.Analyze()
 
-	// Determine output writer (defaults to standard output)
-	outputWriter := os.Stdout
-	var err error
-	if cfg.OutputFile != "" {
-		outputWriter, err = os.Create(cfg.OutputFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating output file %s: %v\n", cfg.OutputFile, err)
+	if outputWriter != os.Stdout {
+		if err := truncateRegularFile(outputWriter); err != nil {
+			fmt.Fprintf(os.Stderr, "Error preparing output file %s: %v\n", cfg.OutputFile, err)
 			return 1
 		}
-		// Closed explicitly below so that a failed final flush is reported;
-		// this deferred close only covers early returns.
-		defer func() { _ = outputWriter.Close() }()
 		fmt.Fprintf(os.Stderr, "Writing results to %s...\n", cfg.OutputFile)
 	}
+	var err error
 
 	// Output the results based on the configured format
 	format := strings.ToLower(cfg.OutputFormat)
@@ -105,6 +116,19 @@ func run() int {
 		return 130 // conventional exit code for SIGINT
 	}
 	return 0
+}
+
+// truncateRegularFile empties f when it is a regular file. Devices and pipes
+// such as /dev/stdout cannot be truncated and are written as they are.
+func truncateRegularFile(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	return f.Truncate(0)
 }
 
 // isTerminal reports whether f is attached to an interactive terminal.

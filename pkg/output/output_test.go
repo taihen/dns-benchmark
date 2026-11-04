@@ -631,6 +631,60 @@ func TestSortServerResultsTieBreakByAddress(t *testing.T) {
 	assert.Equal(t, "b", results[1].ServerAddress)
 }
 
+// TestSortServerResultsCustomFirstThenGroups pins the documented row order:
+// custom and system endpoints first by score, then catalogue endpoints grouped
+// by transport and IP family, each group sorted by score.
+func TestSortServerResultsCustomFirstThenGroups(t *testing.T) {
+	catalogued := func(id, protocol, family string, score float64) *analysis.ServerResult {
+		return &analysis.ServerResult{ServerAddress: id, Protocol: protocol, Score: score, Metadata: catalog.Metadata{EndpointID: id, IPFamily: family, CatalogVersion: "test"}}
+	}
+	results := []*analysis.ServerResult{
+		catalogued("udp4-fast", "UDP", "ipv4", 1),
+		catalogued("dot4-slow", "DoT", "ipv4", 40),
+		{ServerAddress: "custom-slow", Protocol: "UDP", Score: 90},
+		catalogued("doh4-slow", "DoH", "ipv4", 30),
+		catalogued("dot4-fast", "DoT", "ipv4", 5),
+		{ServerAddress: "custom-fast", Protocol: "UDP", Score: 20},
+		catalogued("doh4-fast", "DoH", "ipv4", 10),
+	}
+
+	sortServerResults(results)
+
+	got := make([]string, len(results))
+	for i, res := range results {
+		got[i] = res.ServerAddress
+	}
+	assert.Equal(t, []string{"custom-fast", "custom-slow", "doh4-fast", "doh4-slow", "dot4-fast", "dot4-slow", "udp4-fast"}, got)
+}
+
+// TestInconclusiveNotePrintedOnce checks that the hint explaining inconclusive
+// checks appears once per summary, not once per ranking group, and only when
+// -v is off.
+func TestInconclusiveNotePrintedOnce(t *testing.T) {
+	inconclusive := map[string]analysis.CheckState{"dnssec": analysis.Inconclusive}
+	results := []*analysis.ServerResult{
+		{ServerAddress: "doh", Protocol: "DoH", Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{EndpointID: "doh", IPFamily: "ipv4", CatalogVersion: "test"}},
+		{ServerAddress: "dot", Protocol: "DoT", Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{EndpointID: "dot", IPFamily: "ipv4", CatalogVersion: "test"}},
+		{ServerAddress: "custom", Protocol: "UDP", Score: 10, Checks: inconclusive},
+	}
+	tests := []struct {
+		name      string
+		verbose   bool
+		wantNotes int
+	}{
+		{"quiet run explains inconclusive once", false, 1},
+		{"verbose run already shows details", true, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printSummary(&buf, results, &config.Config{CheckDNSSEC: true, Verbose: tt.verbose})
+			assert.Equal(t, 3, strings.Count(buf.String(), "DNSSEC check was inconclusive."))
+			assert.Equal(t, tt.wantNotes, strings.Count(buf.String(), "run with -v"))
+		})
+	}
+}
+
 // TestSortServerResultsTieBreakByEndpointID checks that endpoints sharing a
 // group, score and serverAddress (possible for IPv4 and IPv6 catalogue
 // endpoints) are ordered by endpoint ID, so output order is deterministic.

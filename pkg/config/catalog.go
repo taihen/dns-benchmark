@@ -72,17 +72,23 @@ func (cfg *Config) LoadServers() error {
 		cfg.Servers = parseAndDeduplicateServers(entries)
 		cfg.IncludeSystemDNS = false
 		var selected []ServerInfo
+		dropped := 0
 		for _, s := range cfg.Servers {
 			if cfg.Transports != "" && !slices.Contains(transports, string(s.Protocol)) {
+				dropped++
 				continue
 			}
 			if cfg.IPFamily != "auto" {
 				if s.IPFamily != "auto" && s.IPFamily != cfg.IPFamily {
+					dropped++
 					continue
 				}
 				s.IPFamily = cfg.IPFamily
 			}
 			selected = append(selected, s)
+		}
+		if dropped > 0 && len(selected) > 0 {
+			fmt.Fprintf(os.Stderr, "Warning: %d endpoint(s) from %s do not match -transports/-ip-family and were skipped.\n", dropped, cfg.ServersFile)
 		}
 		cfg.Servers = selected
 	} else {
@@ -121,7 +127,10 @@ func (cfg *Config) LoadServers() error {
 				}
 				if s.Protocol == DOH {
 					s.Address = e.URL
-					u, _ := url.Parse(e.URL)
+					u, err := url.Parse(e.URL)
+					if err != nil {
+						return fmt.Errorf("catalogue endpoint %s: invalid DoH URL: %w", e.ID, err)
+					}
 					s.Hostname = u.Hostname()
 					s.DoHPath = u.Path
 				}
