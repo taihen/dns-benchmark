@@ -349,6 +349,13 @@ func isValidHostname(hostname string) bool {
 	return true
 }
 
+// isBracketableIPv6 reports whether host may appear inside [] in an endpoint:
+// only IPv6 literals qualify, not IPv4 (including IPv4-mapped forms) or names.
+func isBracketableIPv6(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
 func isNumeric(s string) bool {
 	if s == "" {
 		return false
@@ -413,6 +420,11 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 	host := addrPart
 	if h, p, err := net.SplitHostPort(addrPart); err == nil {
 		host, port = h, p
+		// SplitHostPort strips brackets around any host, so "[1.2.3.4]:53"
+		// would otherwise pass as 1.2.3.4. Brackets are only valid for IPv6.
+		if strings.HasPrefix(addrPart, "[") && !isBracketableIPv6(h) {
+			return ServerInfo{}, fmt.Errorf("invalid bracketed IPv6 %q", addrPart)
+		}
 		if !isNumeric(p) {
 			// Historical behaviour: a non-numeric port falls back to the
 			// protocol default with a warning. Numeric out-of-range ports
@@ -422,7 +434,7 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 		}
 	} else if strings.HasPrefix(addrPart, "[") && strings.HasSuffix(addrPart, "]") {
 		host = strings.TrimSuffix(strings.TrimPrefix(addrPart, "["), "]")
-		if ip := net.ParseIP(host); ip == nil || ip.To4() != nil {
+		if !isBracketableIPv6(host) {
 			return ServerInfo{}, fmt.Errorf("invalid bracketed IPv6 %q", addrPart)
 		}
 	} else if strings.Contains(addrPart, ":") && net.ParseIP(addrPart) == nil {

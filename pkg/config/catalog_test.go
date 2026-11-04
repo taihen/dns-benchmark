@@ -136,7 +136,12 @@ func TestLegacyFileSelectionErrors(t *testing.T) {
 }
 
 func TestRejectMalformedEndpoints(t *testing.T) {
-	for _, entry := range []string{"http://dns.example", "1.1.1.1:0", "1.1.1.1:65536", "[::1", "[1.1.1.1]", "https://dns.example:65536/dns-query", "https://user:pass@dns.example/dns-query"} {
+	for _, entry := range []string{
+		"http://dns.example", "1.1.1.1:0", "1.1.1.1:65536", "[::1",
+		"[1.1.1.1]", "[1.1.1.1]:53", "tls://[1.1.1.1]:853", "[1.1.1.1]:bad", "[dns.example]:53",
+		"host.example:1:2",
+		"https://dns.example:65536/dns-query", "https://user:pass@dns.example/dns-query", "https://dns.example/dns-query#frag",
+	} {
 		t.Run(entry, func(t *testing.T) { _, err := parseServerString(entry); assert.Error(t, err) })
 	}
 }

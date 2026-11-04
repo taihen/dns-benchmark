@@ -114,7 +114,7 @@ Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
 one such as `:-1`) falls back to the protocol default, each with a warning.
 Entries that could never have been benchmarked as written are now rejected
 instead of being repaired with a warning: `http://` entries, ports outside 1–65535
-(such as `:0`), bracketed IPv4 literals (`[1.2.3.4]`), extra-colon forms such as
+(such as `:0`), brackets around anything other than an IPv6 literal (`[1.2.3.4]`, `[1.2.3.4]:53`), extra-colon forms such as
 `host:1:2`, and DoH URLs with user info (`https://user@host/...`), a `#fragment`,
 or an out-of-range port. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
