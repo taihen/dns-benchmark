@@ -798,6 +798,9 @@ func TestPrintSummary(t *testing.T) {
 func TestPrintServerWarnings(t *testing.T) {
 	bTrue := true
 	bFalse := false
+	// The best server is identified by pointer, as findBestServer returns it.
+	soleBest := &analysis.ServerResult{ServerAddress: "best:53", Reliability: 100.0}
+	unreliableBest := &analysis.ServerResult{ServerAddress: "best:53", TotalQueries: 10, Reliability: 50.0}
 
 	tests := []struct {
 		name         string
@@ -898,6 +901,13 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
+			name:       "best server alone has no others to report",
+			results:    []*analysis.ServerResult{soleBest},
+			bestServer: soleBest,
+			cfg:        &config.Config{},
+			wantAbsent: []string{"Other tested servers"},
+		},
+		{
 			name: "no issues besides best server",
 			results: []*analysis.ServerResult{
 				{
@@ -912,14 +922,9 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
-			name: "skip best server in warnings",
-			results: []*analysis.ServerResult{
-				{
-					ServerAddress: "best:53",
-					Reliability:   100.0,
-				},
-			},
-			bestServer: &analysis.ServerResult{ServerAddress: "best:53"},
+			name:       "skip best server in warnings",
+			results:    []*analysis.ServerResult{unreliableBest},
+			bestServer: unreliableBest,
 			cfg:        &config.Config{},
 			wantAbsent: []string{
 				"Warning (best:53)",

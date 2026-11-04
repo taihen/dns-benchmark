@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
@@ -88,6 +89,9 @@ func (cfg *Config) LoadServers() error {
 		c, err := catalog.Load()
 		if err != nil {
 			return err
+		}
+		if err := c.CheckFreshness(time.Now()); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v; resolver details may be out of date, consider upgrading dns-benchmark.\n", err)
 		}
 		profiles, err := c.Select(cfg.Preset, cfg.Profiles)
 		if err != nil {

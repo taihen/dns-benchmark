@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -207,9 +208,33 @@ func TestSharedCorpusAndNoWarmup(t *testing.T) {
 	b := NewBenchmarker(cfg)
 	defer b.Close()
 	results := b.Run(context.Background())
-	assert.Len(t, names["a:853"], 6)
-	assert.Equal(t, names["a:853"], names["b:853"])
+	require.Len(t, names["a:853"], 6)
+	require.Len(t, names["b:853"], 6)
 	assert.NotEmpty(t, results.Metadata.CorpusID)
+	// Same workload: identical cached names and identical uncached templates,
+	// but no uncached name is shared between endpoints.
+	template := func(name string) string {
+		if !strings.HasPrefix(name, nxdomainCheckDomainPrefix) {
+			return name
+		}
+		return name[:strings.LastIndex(name, "-")]
+	}
+	var templatesA, templatesB []string
+	for i := range names["a:853"] {
+		templatesA = append(templatesA, template(names["a:853"][i]))
+		templatesB = append(templatesB, template(names["b:853"][i]))
+	}
+	assert.ElementsMatch(t, templatesA, templatesB)
+	uncachedA := map[string]bool{}
+	for _, name := range names["a:853"] {
+		if strings.HasPrefix(name, nxdomainCheckDomainPrefix) {
+			uncachedA[name] = true
+		}
+	}
+	assert.NotEmpty(t, uncachedA)
+	for _, name := range names["b:853"] {
+		assert.False(t, uncachedA[name], "uncached name %s reused across endpoints", name)
+	}
 }
 
 func TestLocalDoQStreamTimeout(t *testing.T) {

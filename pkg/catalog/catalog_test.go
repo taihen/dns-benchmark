@@ -34,7 +34,7 @@ func TestCatalogRejectsInvalidMetadata(t *testing.T) {
 		{"unsupported claim", func(c *Catalog) { c.Profiles[0].Protocols = append(c.Profiles[0].Protocols, "dnscrypt") }},
 		{"invalid family", func(c *Catalog) { c.Profiles[0].Endpoints[0].Family = "ipv6" }},
 		{"bad port", func(c *Catalog) { c.Profiles[0].Endpoints[0].Port = 65536 }},
-		{"stale", func(c *Catalog) { c.Profiles[0].LastVerified = "2020-01-01" }},
+		{"malformed verification date", func(c *Catalog) { c.Profiles[0].LastVerified = "03/11/2026" }},
 		{"invalid status", func(c *Catalog) { c.Profiles[0].Status = "retired" }},
 	}
 	for _, tt := range tests {
@@ -42,7 +42,48 @@ func TestCatalogRejectsInvalidMetadata(t *testing.T) {
 			c, err := Load()
 			require.NoError(t, err)
 			tt.mutate(c)
-			assert.Error(t, c.Validate(time.Now()))
+			assert.Error(t, c.Validate())
+		})
+	}
+}
+
+func TestCatalogFreshness(t *testing.T) {
+	c, err := Load()
+	require.NoError(t, err)
+	// Maintenance reminder: this fails once the embedded catalogue needs re-verification.
+	assert.NoError(t, c.CheckFreshness(time.Now()))
+}
+
+func TestCheckFreshnessDoesNotAffectLoading(t *testing.T) {
+	verified := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		status    string
+		now       time.Time
+		wantStale bool
+	}{
+		{"fresh", "active", verified.Add(30 * 24 * time.Hour), false},
+		{"boundary", "active", verified.Add(MaxReviewAge), false},
+		{"stale active", "active", verified.Add(MaxReviewAge + 24*time.Hour), true},
+		{"stale deprecated", "deprecated", verified.Add(MaxReviewAge + 24*time.Hour), false},
+		{"clock behind", "active", verified.Add(-48 * time.Hour), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load()
+			require.NoError(t, err)
+			c.Profiles[0].Status = tt.status
+			c.Profiles[0].LastVerified = verified.Format("2006-01-02")
+			for i := 1; i < len(c.Profiles); i++ {
+				c.Profiles[i].Status = "deprecated" // isolate the profile under test
+			}
+			assert.NoError(t, c.Validate(), "freshness must never fail structural validation")
+			err = c.CheckFreshness(tt.now)
+			if tt.wantStale {
+				assert.ErrorContains(t, err, c.Profiles[0].ID)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

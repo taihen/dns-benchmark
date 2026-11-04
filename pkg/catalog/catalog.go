@@ -51,7 +51,9 @@ type Endpoint struct {
 	TLSServerName string `json:"tlsServerName,omitempty"`
 }
 
-// Load decodes and validates the embedded catalogue without making network requests.
+// Load decodes and structurally validates the embedded catalogue without making
+// network requests. Review freshness is deliberately not enforced here so that a
+// released binary keeps working after its catalogue ages; see CheckFreshness.
 func Load() (*Catalog, error) {
 	var c Catalog
 	decoder := json.NewDecoder(bytes.NewReader(embedded))
@@ -59,8 +61,8 @@ func Load() (*Catalog, error) {
 	if err := decoder.Decode(&c); err != nil {
 		return nil, fmt.Errorf("decode catalogue: %w", err)
 	}
-	if err := c.Validate(time.Now()); err != nil {
-		return nil, err
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("embedded resolver catalogue %s is invalid: %w", c.Version, err)
 	}
 	return &c, nil
 }
@@ -83,9 +85,9 @@ func validName(name string) bool {
 }
 
 // Validate checks identifiers, provenance, lifecycle, families and transport claims.
-// Active entries must be reviewed within 366 days; deprecated entries are retained
-// for historical use but excluded from selection.
-func (c *Catalog) Validate(now time.Time) error {
+// It is independent of the current time; review freshness is checked separately
+// by CheckFreshness.
+func (c *Catalog) Validate() error {
 	if c.Version == "" || len(c.Profiles) == 0 {
 		return fmt.Errorf("catalogue requires version and profiles")
 	}
@@ -101,9 +103,8 @@ func (c *Catalog) Validate(now time.Time) error {
 		if p.Status != "active" && p.Status != "deprecated" {
 			return fmt.Errorf("invalid status for %s", p.ID)
 		}
-		verified, err := time.Parse("2006-01-02", p.LastVerified)
-		if err != nil || verified.After(now.Add(24*time.Hour)) || (p.Status == "active" && now.Sub(verified) > 366*24*time.Hour) {
-			return fmt.Errorf("invalid or stale verification date for %s", p.ID)
+		if _, err := time.Parse("2006-01-02", p.LastVerified); err != nil {
+			return fmt.Errorf("invalid verification date for %s", p.ID)
 		}
 		for _, source := range p.SourceURLs {
 			u, err := url.Parse(source)
@@ -143,6 +144,31 @@ func (c *Catalog) Validate(now time.Time) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// MaxReviewAge is how long an active profile may go without re-verification
+// before CheckFreshness reports it as stale.
+const MaxReviewAge = 366 * 24 * time.Hour
+
+// CheckFreshness reports active profiles whose lastVerified date is older than
+// MaxReviewAge or later than now (plus one day of clock tolerance). It is a
+// maintenance check for tests and CI, and a warning at runtime, never a reason
+// to refuse to run.
+func (c *Catalog) CheckFreshness(now time.Time) error {
+	var stale []string
+	for _, p := range c.Profiles {
+		if p.Status != "active" {
+			continue
+		}
+		verified, err := time.Parse("2006-01-02", p.LastVerified)
+		if err != nil || verified.After(now.Add(24*time.Hour)) || now.Sub(verified) > MaxReviewAge {
+			stale = append(stale, p.ID)
+		}
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf("catalogue %s has profiles not verified within %d days of %s: %s", c.Version, int(MaxReviewAge.Hours()/24), now.Format("2006-01-02"), strings.Join(stale, ", "))
 	}
 	return nil
 }

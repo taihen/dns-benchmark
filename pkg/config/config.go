@@ -41,40 +41,50 @@ type ServerInfo struct {
 	DoHPath    string // Path for DoH endpoint (e.g., /dns-query).
 }
 
-// String representation for ServerInfo, used for display and deduplication keys.
+// String returns the unique identity of an endpoint, used as the results key and
+// for verbose output. Catalogue endpoints are prefixed with their endpoint ID so
+// that two endpoints sharing an address remain distinct; others use AddressString().
 func (si ServerInfo) String() string {
 	if si.EndpointID != "" {
 		return si.EndpointID + " (" + string(si.Protocol) + ":" + si.Address + ")"
 	}
+	return si.AddressString()
+}
+
+// AddressString returns the protocol-prefixed address format used before the
+// catalogue existed (for example "1.1.1.1:53", "tls://1.1.1.1:853" or a DoH URL).
+// It is reported as serverAddress in CSV, JSON and console output.
+func (si ServerInfo) AddressString() string {
 	switch si.Protocol {
 	case DOH:
 		return si.Address // DoH address is the full URL
 	case DOT:
-		// Use Hostname for DoT if it's not an IP, otherwise use Address (which includes port)
-		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
-			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil {
-				port = "853"
-			} // Default DoT port
-			return fmt.Sprintf("tls://%s", net.JoinHostPort(si.Hostname, port))
-		}
-		return fmt.Sprintf("tls://%s", si.Address) // Fallback to using Address
+		return tlsAddressString("tls", si)
 	case DOQ:
-		// Use Hostname for DoQ if it's not an IP, otherwise use Address
-		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
-			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil {
-				port = "853"
-			} // Default DoQ port
-			return fmt.Sprintf("quic://%s", net.JoinHostPort(si.Hostname, port))
-		}
-		return fmt.Sprintf("quic://%s", si.Address)
+		return tlsAddressString("quic", si)
 	case TCP:
 		// Preserve tcp:// prefix for TCP endpoints
 		return fmt.Sprintf("tcp://%s", si.Address)
 	default: // UDP
 		return si.Address
 	}
+}
+
+// tlsAddressString formats a DoT/DoQ endpoint by its authenticated name when it
+// has one (catalogue TLSServerName, else a non-IP Hostname), otherwise by Address.
+func tlsAddressString(scheme string, si ServerInfo) string {
+	name := si.TLSServerName
+	if name == "" {
+		name = si.Hostname
+	}
+	if name != "" && net.ParseIP(name) == nil {
+		_, port, err := net.SplitHostPort(si.Address)
+		if err != nil {
+			port = "853" // Default DoT/DoQ port
+		}
+		return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(name, port))
+	}
+	return fmt.Sprintf("%s://%s", scheme, si.Address)
 }
 
 // Label returns the friendly display name for the protocol (e.g. "DoT").
@@ -150,7 +160,7 @@ func LoadConfig() *Config {
 	flag.BoolVar(&cfg.CheckFiltering, "filtering", false, "Run documented provider filtering probes outside latency scoring")
 	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", false, "Check for DNSSEC support")
 	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
-	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
+	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection (requires -rebinding-domain)")
 	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Measure latency for a random .com NXDOMAIN lookup")
 	flag.StringVar(
 		&cfg.AccuracyCheckFile,
@@ -170,6 +180,16 @@ func LoadConfig() *Config {
 	flag.StringVar(&cfg.IPFamily, "ip-family", "auto", "IP family: ipv4, ipv6, auto (both for explicit catalogue selections)")
 	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain resolving to private addresses; required for a conclusive rebinding probe")
 	flag.Parse()
+
+	// -version must work without selecting servers or loading the catalogue.
+	if cfg.ShowVersion {
+		return cfg
+	}
+
+	if err := cfg.validateChecks(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Load accuracy check data first
 	if cfg.AccuracyCheckFile != "" {
@@ -204,6 +224,14 @@ func LoadConfig() *Config {
 	}
 
 	return cfg
+}
+
+// validateChecks rejects check flags that cannot produce a conclusive result.
+func (cfg *Config) validateChecks() error {
+	if cfg.CheckRebinding && strings.TrimSpace(cfg.RebindingDomain) == "" {
+		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name that resolves to a private address>")
+	}
+	return nil
 }
 
 // printVerboseConfig prints the configuration details.

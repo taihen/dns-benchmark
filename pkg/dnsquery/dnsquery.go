@@ -41,7 +41,9 @@ const (
 
 	dotcomCheckPrefix = "dnsbench-dotcom-"
 	dotcomCheckSuffix = ".com."
-	dohUserAgent      = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
+	// uncachedQuerySuffix is the zone for random uncached latency names.
+	uncachedQuerySuffix = ".net."
+	dohUserAgent        = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
 
 	// QUIC connection pool configuration
 	maxPooledConnections = 10
@@ -578,7 +580,7 @@ func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 
 	// Initialize Results map
 	for _, server := range servers {
-		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String(), Protocol: server.Protocol.Label(), Metadata: server.Metadata, Checks: initialCheckStates(b.Config, server)}
+		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.AddressString(), Protocol: server.Protocol.Label(), Metadata: server.Metadata, Checks: initialCheckStates(b.Config, server)}
 	}
 
 	if b.ProgressWriter != nil {
@@ -660,11 +662,18 @@ func (b *Benchmarker) runLatencyBenchmark(ctx context.Context, servers []config.
 
 	// Enqueue jobs round-robin across servers so an interrupted run still has
 	// samples for every server instead of exhausting the first server's queue.
+	//
+	// The corpus is a per-run list of name templates shared by every endpoint, so
+	// all endpoints get the same workload (identified by CorpusID). Each uncached
+	// template is made unique per endpoint by endpointQueryName; otherwise the
+	// first endpoint to ask would warm the cache shared by the provider's other
+	// endpoints (other transports and families) and their "uncached" samples
+	// would really be cache hits.
 	corpus := make([]string, totalLatencyJobsPerServer)
 	for i := range corpus {
 		corpus[i] = cachedDomain
 		if i >= numCached {
-			corpus[i] = generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.")
+			corpus[i] = generateUniqueDomain(nxdomainCheckDomainPrefix, "")
 		}
 	}
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%d\n%s", qType, strings.Join(corpus, "\n"))))
@@ -674,7 +683,7 @@ func (b *Benchmarker) runLatencyBenchmark(ctx context.Context, servers []config.
 			if i < numCached {
 				jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
 			} else {
-				uncachedDomain := corpus[i]
+				uncachedDomain := endpointQueryName(corpus[i], uncachedQuerySuffix, server)
 				jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
 			}
 		}
@@ -724,8 +733,13 @@ func (b *Benchmarker) processLatencyResult(res queryJobResult) {
 	// NXDOMAIN is the expected response for uncached queries to random domains.
 	if res.result.Error == nil && res.result.Response != nil {
 		if res.result.Response.Truncated {
+			// Counted as a failed probe in its own category; Errors equals the sum
+			// of the timeout, transport, malformed and truncated counters.
 			serverResult.TruncatedResponses++
 			serverResult.Errors++
+			if b.Config.Verbose {
+				fmt.Fprintf(os.Stderr, "Latency query for %s (%s) was truncated; not scored\n", serverKey, res.queryType)
+			}
 			return
 		}
 		if isUnexpectedLatencyRcode(res.queryType, res.result.Response.Rcode) {
@@ -740,9 +754,6 @@ func (b *Benchmarker) processLatencyResult(res queryJobResult) {
 		return
 	}
 
-	if res.result.Response != nil && res.result.Response.Truncated {
-		serverResult.TruncatedResponses++
-	}
 	serverResult.Errors++
 	outcome := classifyQueryResult(res.result)
 	switch outcome {
@@ -770,7 +781,7 @@ func isUnexpectedLatencyRcode(queryType analysis.QueryType, rcode int) bool {
 // prepareCheckJobs creates a list of query jobs for the enabled checks.
 func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 	var checkJobsList []queryJob
-	dotcomDomain := generateUniqueDomain(dotcomCheckPrefix, dotcomCheckSuffix)
+	dotcomTemplate := generateUniqueDomain(dotcomCheckPrefix, "")
 	nxDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, nxdomainCheckDomainSuffix)
 	for _, server := range servers {
 		if b.Config.CheckDNSSEC {
@@ -798,7 +809,7 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: qtype, checkType: "accuracy"})
 		}
 		if b.Config.CheckDotcom {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dotcomDomain, qType: dns.TypeA, checkType: "dotcom"})
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: endpointQueryName(dotcomTemplate, dotcomCheckSuffix, server), qType: dns.TypeA, checkType: "dotcom"})
 		}
 	}
 	return checkJobsList
@@ -888,7 +899,7 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		serverResult.Checks["rebinding"] = analysis.StateFromBool(serverResult.BlocksRebinding, false)
 	case "filtering":
 		state := analysis.Inconclusive
-		if res.result.Error == nil && res.result.Response != nil && res.result.Response.Rcode == dns.RcodeSuccess && len(res.result.Response.Answer) > 0 {
+		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeSuccess && len(res.result.Response.Answer) > 0 {
 			state = analysis.Fail
 			for _, rr := range res.result.Response.Answer {
 				if a, ok := rr.(*dns.A); ok && a.A.IsUnspecified() {
@@ -903,7 +914,7 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		serverResult.IsAccurate = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
 		serverResult.Checks["accuracy"] = analysis.StateFromBool(serverResult.IsAccurate, false)
 	case "dotcom":
-		if res.result.Error == nil && res.result.Response != nil {
+		if conclusiveResponse(res.result) {
 			latency := res.result.Latency
 			serverResult.DotcomLatency = &latency
 		}
@@ -968,6 +979,15 @@ func generateUniqueDomain(prefix, suffix string) string {
 	} // Fallback
 	uniquePart := hex.EncodeToString(randomBytes)
 	return fmt.Sprintf("%s%s%s", prefix, uniquePart, suffix)
+}
+
+// endpointQueryName derives an endpoint-specific name from a shared corpus
+// template. The endpoint token is appended to the same label rather than added
+// as a subdomain: a subdomain of a shared non-existent name could be answered
+// from a cached NXDOMAIN for its parent (RFC 8020), defeating the uniqueness.
+func endpointQueryName(template, suffix string, server config.ServerInfo) string {
+	sum := sha256.Sum256([]byte(server.String()))
+	return fmt.Sprintf("%s-%x%s", template, sum[:4], suffix)
 }
 
 func boolPtr(value bool) *bool {
@@ -1053,11 +1073,18 @@ func classifyQueryResult(result QueryResult) QueryOutcome {
 
 // --- Check Helper Functions ---
 
+// conclusiveResponse reports whether a check result can be used as evidence.
+// Errors, missing responses and truncated (TC) replies are inconclusive: a
+// truncated answer section cannot prove the absence of records.
+func conclusiveResponse(result QueryResult) bool {
+	return result.Error == nil && result.Response != nil && !result.Response.Truncated
+}
+
 // checkDNSSECValidation checks whether the resolver performs DNSSEC validation.
 // The check query uses a deliberately broken DNSSEC domain, so validating resolvers
 // should return SERVFAIL while non-validating resolvers typically return NOERROR.
 func checkDNSSECValidation(result QueryResult) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	switch result.Response.Rcode {
@@ -1081,7 +1108,7 @@ func checkDNSSECValidation(result QueryResult) *bool {
 // It determines if a server returns a NOERROR response with records for a deliberately non-existent domain,
 // which is indicative of hijacking.
 func checkNXDOMAINHijack(result QueryResult) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	rcode := result.Response.Rcode
@@ -1095,33 +1122,29 @@ func checkNXDOMAINHijack(result QueryResult) *bool {
 }
 
 // checkRebindingProtection checks for DNS rebinding protection.
-// It queries a domain known to trigger rebinding attempts and expects either an error or no answer.
-// A successful response with answers indicates lack of rebinding protection.
+// It queries a controlled domain that resolves to a private address. Protection
+// is reported only when the resolver answers NOERROR without address records,
+// which is how rebinding filters strip private answers. Address records mean
+// the private answer was passed through. NXDOMAIN and REFUSED are inconclusive:
+// they also result from a mistyped or lapsed test domain, or a resolver that
+// refuses the client, and so are not evidence of rebinding protection.
 func checkRebindingProtection(result QueryResult) *bool {
-	if result.Error != nil {
+	if !conclusiveResponse(result) || result.Response.Rcode != dns.RcodeSuccess {
 		return nil
 	}
-	if result.Response == nil {
-		return nil
-	}
-	if result.Response.Rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 {
-		return boolPtr(false) // Received NOERROR with answers - vulnerable to rebinding
-	}
-	if result.Response.Rcode != dns.RcodeSuccess {
-		switch result.Response.Rcode {
-		case dns.RcodeRefused, dns.RcodeNameError:
-			return boolPtr(true)
-		default:
-			return nil
+	for _, rr := range result.Response.Answer {
+		switch rr.(type) {
+		case *dns.A, *dns.AAAA:
+			return boolPtr(false) // Address records passed through: vulnerable to rebinding
 		}
 	}
-	return boolPtr(true) // NOERROR without answers
+	return boolPtr(true) // NOERROR without address records
 }
 
 // checkResponseAccuracy checks if the DNS response is accurate by comparing the answer to an expected IP.
 // It verifies that at least one A record in the answer matches the expected IP address.
 func checkResponseAccuracy(result QueryResult, expectedIP string) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	if result.Response.Rcode != dns.RcodeSuccess {

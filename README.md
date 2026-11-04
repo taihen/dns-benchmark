@@ -43,14 +43,14 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - DNS over QUIC (DoQ) (`quic://` prefix)
 - **Metrics Measured:**
   - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
-  - **Uncached Latency:** Average and Standard Deviation for resolving unique, likely uncached domains.
+  - **Uncached Latency:** Average and Standard Deviation for resolving random names that are unique per endpoint and per run, so they are likely uncached.
   - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
   - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
   - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks results within matching filtering-policy, role, ECS, transport, and IP-family groups. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
-  - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false).
+  - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false; requires `-rebinding-domain`).
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
 - **Configuration:**
   - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
@@ -110,19 +110,24 @@ Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
 rejected with a warning instead of being silently reinterpreted. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
 
-All endpoints receive the same randomly generated latency query corpus. Shared
-caches can still influence measurements; random names are only *likely* uncached.
+All endpoints receive the same latency workload: one randomly generated corpus of
+name templates per run (identified by `queryCorpusId`). Each uncached template is
+made unique per endpoint, so endpoints that share a provider cache (other
+transports or address families) cannot warm each other's "uncached" names. Random
+names are still only *likely* uncached.
 There are no warm-up queries. Connection establishment contributes to measured
 latency, and reusable DoH/DoQ connections may benefit later probes. All probes use
-the configured global rate limiter. Truncated replies are counted explicitly and
-excluded from latency scoring; no uncounted TCP fallback is sent.
+the configured global rate limiter. Truncated replies count as failed
+probes in their own counter, are not used as latency samples or check evidence, and
+no uncounted TCP fallback is sent.
 
 DNSSEC only reports validation failure evidence when a bogus-domain SERVFAIL has
 a DNSSEC-related Extended DNS Error. Generic SERVFAIL is inconclusive. NXDOMAIN
 checks use two reserved-domain names and recognize CNAME redirects. Rebinding
 requires `-rebinding-domain` pointing to a controlled domain expected to return
-private addresses; without it the result remains inconclusive and no probe is
-sent. Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6;
+private addresses; `-rebinding` without it is rejected. Only NOERROR without address
+records counts as protection; NXDOMAIN and REFUSED are inconclusive, since a
+mistyped domain or a refusing resolver produces them too. Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6;
 the first expected address chooses A or AAAA. `-filtering` currently uses
 Cloudflare's documented malware/adult test domains for its matching profiles;
 profiles without documented probes report `not_applicable`. Policy probes never
@@ -138,12 +143,17 @@ Each result includes provider, profile, roles, endpoint ID, family, transport,
 TLS name, catalogue version, source URLs, comparison group, explicit probe states
 (`pass`, `fail`, `inconclusive`, `not_applicable`), and separate truncation,
 transport, timeout, malformed-response, RCODE, and EDE policy counters. Existing
-boolean check fields remain compatibility aliases. CSV appends identity, policy,
+boolean check fields remain compatibility aliases. `serverAddress` (and the first
+CSV column) keeps the protocol-prefixed form accepted by `-f`, for example
+`1.1.1.1:53`, `tls://one.one.one.one:853` or a DoH URL; use `endpointId` to tell
+apart catalogue endpoints that share an address string across IP families. CSV appends identity, policy,
 probe state, and skipped-query columns after the existing metric columns.
 Machine-readable stdout contains only JSON or CSV; progress goes to stderr.
 
-Catalogue validation runs in the regular test suite, rejects active entries older
-than 366 days, and excludes deprecated entries from selection. Tests use local
+Catalogue structure is validated on every load. Review freshness is a maintenance
+check: the test suite fails once an active entry is older than 366 days, while the
+binary only prints a warning to stderr and keeps running. Deprecated entries are
+excluded from selection. Tests use local
 UDP, TCP, TLS, HTTPS, and QUIC fixtures; they do not query public resolvers. CI
 uses the toolchain in `go.mod` and checks formatting, vet, race tests, and module
 tidiness without updating module files. Public endpoint reachability is not
@@ -203,7 +213,8 @@ This will create an executable named `dns-benchmark` in the current directory.
 ./dns-benchmark -dotcom -format json -o results.json
 
 # Run with defaults, enable DNSSEC, NXDomain Hijack and Rebinding checks
-./dns-benchmark -dnssec -rebinding -nxdomain
+# (private.example.net stands for a domain you control that resolves to a private IP)
+./dns-benchmark -dnssec -nxdomain -rebinding -rebinding-domain private.example.net
 
 # Run accuracy check using a file (e.g., accuracy.txt containing "mydomain.com 1.2.3.4")
 ./dns-benchmark -accuracy-file accuracy.txt

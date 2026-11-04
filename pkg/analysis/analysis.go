@@ -76,7 +76,7 @@ type ServerResult struct {
 // BenchmarkResults holds the results for all tested servers.
 type BenchmarkResults struct {
 	Metadata RunMetadata              `json:"metadata"`
-	Results  map[string]*ServerResult // Map key is ServerResult.ServerAddress
+	Results  map[string]*ServerResult // Map key is config.ServerInfo.String(), unique per endpoint
 
 }
 

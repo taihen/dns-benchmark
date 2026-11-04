@@ -48,3 +48,51 @@ func TestPolicyGroupsAndMetadata(t *testing.T) {
 	assert.Equal(t, "Provider A", rows[2][header["Provider"]])
 	assert.Equal(t, "a-doh-v4", rows[2][header["EndpointID"]])
 }
+
+func TestSummaryForUncataloguedEndpoints(t *testing.T) {
+	catalogued := func(address string, score float64) *analysis.ServerResult {
+		return &analysis.ServerResult{ServerAddress: address, Protocol: "UDP", Score: score, Reliability: 100, Metadata: catalog.Metadata{Provider: "Provider A", Profile: "a-general", Roles: []string{"general"}, FilteringPolicy: "unfiltered", ECS: "no", IPFamily: "ipv4", Transport: "udp", EndpointID: "a-udp-" + address, CatalogVersion: "test"}}
+	}
+	custom := func(address string, score float64) *analysis.ServerResult {
+		return &analysis.ServerResult{ServerAddress: address, Protocol: "UDP", Score: score, Reliability: 100, Metadata: catalog.Metadata{Provider: "custom", Profile: "custom", Roles: []string{"custom"}, IPFamily: "ipv4", Transport: "udp"}}
+	}
+	system := &analysis.ServerResult{ServerAddress: "192.0.2.53:53", Protocol: "UDP", Score: 3, Reliability: 100, Metadata: catalog.Metadata{Provider: "system", Profile: "system", Roles: []string{"system"}, IPFamily: "ipv4", Transport: "udp"}}
+
+	tests := []struct {
+		name        string
+		results     []*analysis.ServerResult
+		contains    []string
+		notContains []string
+	}{
+		{
+			name:        "custom file only keeps the original conclusion",
+			results:     []*analysis.ServerResult{custom("192.0.2.1:53", 5), custom("tls://dns.example:853", 2)},
+			contains:    []string{"--- Conclusion ---", "Recommended server: tls://dns.example:853", "Other tested servers performed reliably", "Note: Results are based on"},
+			notContains: []string{"Fastest ", "comparison group"},
+		},
+		{
+			name:        "catalogue groups plus system DNS",
+			results:     []*analysis.ServerResult{catalogued("1.1.1.1:53", 4), catalogued("1.0.0.1:53", 6), system},
+			contains:    []string{"--- Recommendations by comparison group ---", "Fastest unfiltered / general / no / UDP / ipv4: Provider A (a-general), 1.1.1.1:53", "--- Conclusion (system and custom endpoints, no catalogue policy) ---", "Recommended server: 192.0.2.53:53"},
+			notContains: []string{"Fastest custom", "Fastest system"},
+		},
+		{
+			name:        "catalogue only has no conclusion block",
+			results:     []*analysis.ServerResult{catalogued("1.1.1.1:53", 4)},
+			contains:    []string{"Fastest unfiltered"},
+			notContains: []string{"--- Conclusion", "Other tested servers"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printSummary(&buf, tt.results, &config.Config{})
+			for _, want := range tt.contains {
+				assert.Contains(t, buf.String(), want)
+			}
+			for _, unwanted := range tt.notContains {
+				assert.NotContains(t, buf.String(), unwanted)
+			}
+		})
+	}
+}

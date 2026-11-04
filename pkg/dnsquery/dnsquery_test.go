@@ -409,15 +409,20 @@ func TestCheckRebindingProtection(t *testing.T) {
 	respBlockedRefused := createTestResponse(req, dns.RcodeRefused)
 	respBlockedNoErrorNoAnswer := createTestResponse(req, dns.RcodeSuccess)                        // NOERROR, no answer
 	respAllowed := createTestResponse(req, dns.RcodeSuccess, createARecord(domain, "192.168.1.1")) // Allowed (returns answer)
+	respTruncated := createTestResponse(req, dns.RcodeSuccess)
+	respTruncated.Truncated = true
+	respCNAMEOnly := createTestResponse(req, dns.RcodeSuccess, &dns.CNAME{Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60}, Target: "target.fixture.invalid."})
 
 	tests := []struct {
 		name   string
 		result QueryResult
 		want   *bool // True if blocked
 	}{
-		{"Blocked (NXDOMAIN)", QueryResult{Response: respBlockedNX}, boolPtr(true)},
-		{"Blocked (REFUSED)", QueryResult{Response: respBlockedRefused}, boolPtr(true)},
+		{"NXDOMAIN is inconclusive (typo or lapsed test domain)", QueryResult{Response: respBlockedNX}, nil},
+		{"REFUSED is inconclusive (client refused)", QueryResult{Response: respBlockedRefused}, nil},
+		{"Truncated NOERROR is inconclusive", QueryResult{Response: respTruncated}, nil},
 		{"Blocked (NOERROR, No Answer)", QueryResult{Response: respBlockedNoErrorNoAnswer}, boolPtr(true)},
+		{"Blocked (NOERROR, CNAME without address)", QueryResult{Response: respCNAMEOnly}, boolPtr(true)},
 		{"Allowed (NOERROR + Answer)", QueryResult{Response: respAllowed}, boolPtr(false)},
 		{"Query Error", QueryResult{Error: errors.New("fail")}, nil},
 		{"Nil Response", QueryResult{Response: nil}, nil},
@@ -662,7 +667,7 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 
 	reqRebinding := &dns.Msg{}
 	reqRebinding.SetQuestion(rebindingCheckDomain, dns.TypeA)
-	respRebindingBlocked := createTestResponse(reqRebinding, dns.RcodeRefused)
+	respRebindingBlocked := createTestResponse(reqRebinding, dns.RcodeSuccess) // private answer stripped
 	respRebindingAllowed := createTestResponse(reqRebinding, dns.RcodeSuccess, createARecord(rebindingCheckDomain, "192.168.1.1"))
 
 	reqAccuracy := &dns.Msg{}
@@ -1389,4 +1394,28 @@ func TestQuicPoolCleanup(t *testing.T) {
 	assert.NotPanics(t, func() {
 		benchmarker.Close()
 	})
+}
+
+func TestCheckHelpersTreatTruncatedAsInconclusive(t *testing.T) {
+	req := new(dns.Msg)
+	req.SetQuestion("fixture.invalid.", dns.TypeA)
+	tests := []struct {
+		name    string
+		rcode   int
+		answers []dns.RR
+		check   func(QueryResult) *bool
+	}{
+		{"dnssec NOERROR", dns.RcodeSuccess, nil, checkDNSSECValidation},
+		{"nxdomain NXDOMAIN", dns.RcodeNameError, nil, checkNXDOMAINHijack},
+		{"rebinding NOERROR", dns.RcodeSuccess, nil, checkRebindingProtection},
+		{"accuracy NOERROR", dns.RcodeSuccess, []dns.RR{createARecord("fixture.invalid.", "192.0.2.1")}, func(r QueryResult) *bool { return checkResponseAccuracy(r, "192.0.2.1") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := createTestResponse(req, tt.rcode, tt.answers...)
+			require.NotNil(t, tt.check(QueryResult{Response: resp.Copy()}), "untruncated reply should be conclusive")
+			resp.Truncated = true
+			assert.Nil(t, tt.check(QueryResult{Response: resp}))
+		})
+	}
 }

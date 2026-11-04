@@ -97,8 +97,9 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 	return slice
 }
 
-// sortServerResults sorts results by composite Score ascending (lower is
-// better). Unrankable servers (+Inf) sort last; ties break by ServerAddress for
+// sortServerResults sorts results by comparison group, then by composite Score
+// ascending within each group (lower is better). Unrankable servers (+Inf) sort
+// last in their group; ties break by ServerAddress, then EndpointID, for
 // deterministic output.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
@@ -109,7 +110,10 @@ func sortServerResults(results []*analysis.ServerResult) {
 		if si != sj {
 			return si < sj
 		}
-		return results[i].ServerAddress < results[j].ServerAddress
+		if results[i].ServerAddress != results[j].ServerAddress {
+			return results[i].ServerAddress < results[j].ServerAddress
+		}
+		return results[i].EndpointID < results[j].EndpointID
 	})
 }
 
@@ -327,13 +331,18 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 	return jsonRes
 }
 
-// printSummary adds a concluding recommendation based on the results.
+// printSingleGroupSummary prints a concluding recommendation across results.
 func printSingleGroupSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
+	printConclusion(writer, "\n--- Conclusion ---", results, cfg)
+}
+
+// printConclusion prints the recommendation block under the given heading.
+func printConclusion(writer io.Writer, heading string, results []*analysis.ServerResult, cfg *config.Config) {
 	if len(results) == 0 {
 		return
 	}
 
-	_, _ = fmt.Fprintln(writer, "\n--- Conclusion ---")
+	_, _ = fmt.Fprintln(writer, heading)
 
 	bestServer := findBestServer(results, cfg)
 
@@ -390,10 +399,12 @@ func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analy
 func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bestServer *analysis.ServerResult, cfg *config.Config) {
 	const reliabilityThreshold = 99.0
 	issuesFound := false
+	others := 0
 	for _, res := range results {
-		if bestServer != nil && res.ServerAddress == bestServer.ServerAddress {
+		if res == bestServer {
 			continue
 		}
+		others++
 
 		warningPrefix := fmt.Sprintf("Warning (%s):", res.ServerAddress)
 		serverIssues := false
@@ -427,7 +438,7 @@ func printServerWarnings(writer io.Writer, results []*analysis.ServerResult, bes
 		}
 	}
 
-	if !issuesFound && bestServer != nil {
+	if !issuesFound && bestServer != nil && others > 0 {
 		_, _ = fmt.Fprintln(writer, "Other tested servers performed reliably without major issues detected.")
 	}
 }
@@ -537,9 +548,19 @@ type JSONReport struct {
 	Results       []JSONServerResult   `json:"results"`
 }
 
+// printSummary prints recommendations. Catalogue endpoints are compared only
+// within their ComparisonGroup (matching policy, roles, ECS, transport and IP
+// family). Endpoints without catalogue metadata (-f entries and system DNS) have
+// no documented policy, so they are summarised together with the original
+// single "Conclusion"; a run made only of such endpoints prints exactly that.
 func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
 	groups := map[string][]*analysis.ServerResult{}
+	var uncatalogued []*analysis.ServerResult
 	for _, res := range results {
+		if res.CatalogVersion == "" {
+			uncatalogued = append(uncatalogued, res)
+			continue
+		}
 		groups[res.ComparisonGroup()] = append(groups[res.ComparisonGroup()], res)
 	}
 	keys := make([]string, 0, len(groups))
@@ -547,19 +568,24 @@ func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *confi
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	if len(keys) > 0 {
+		_, _ = fmt.Fprintln(writer, "\n--- Recommendations by comparison group ---")
+	}
 	for _, key := range keys {
 		group := groups[key]
-		// Old callers without profile metadata retain their existing summary.
-		if group[0].Profile == "" {
-			printSingleGroupSummary(writer, group, cfg)
-			continue
-		}
 		best := findBestServer(group, cfg)
 		if best != nil {
 			_, _ = fmt.Fprintf(writer, "Fastest %s: %s (%s), %s, score %s\n", key, best.Provider, best.Profile, best.ServerAddress, formatScore(best.Score))
+		} else {
+			_, _ = fmt.Fprintf(writer, "No rankable server for %s.\n", key)
 		}
 		printServerWarnings(writer, group, best, cfg)
 	}
+	if len(keys) == 0 {
+		printSingleGroupSummary(writer, uncatalogued, cfg)
+		return
+	}
+	printConclusion(writer, "\n--- Conclusion (system and custom endpoints, no catalogue policy) ---", uncatalogued, cfg)
 }
 
 func catalogVersion(results *analysis.BenchmarkResults) string {
