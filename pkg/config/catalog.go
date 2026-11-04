@@ -87,7 +87,10 @@ func (cfg *Config) LoadServers() error {
 			}
 			selected = append(selected, s)
 		}
-		if dropped > 0 && len(selected) > 0 {
+		if dropped > 0 && len(selected) == 0 {
+			return fmt.Errorf("no endpoints match the selection: all %d endpoint(s) from %s were skipped by -transports/-ip-family", dropped, cfg.ServersFile)
+		}
+		if dropped > 0 {
 			fmt.Fprintf(os.Stderr, "Warning: %d endpoint(s) from %s do not match -transports/-ip-family and were skipped.\n", dropped, cfg.ServersFile)
 		}
 		cfg.Servers = selected

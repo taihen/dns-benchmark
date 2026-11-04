@@ -293,3 +293,28 @@ func TestServersFileFilteredByFamilyAndTransport(t *testing.T) {
 		})
 	}
 }
+
+// TestServersFileAllEntriesFilteredReportsCount checks that when -transports
+// or -ip-family removes every -f entry, the error says how many were skipped
+// instead of only "no endpoints match the selection".
+func TestServersFileAllEntriesFilteredReportsCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "servers.txt")
+	require.NoError(t, os.WriteFile(path, []byte("1.1.1.1\n8.8.8.8\ntls://dns.example\n"), 0o600))
+	tests := []struct {
+		name       string
+		family     string
+		transports string
+	}{
+		{"transport filter removes all", "auto", "doh"},
+		{"family filter removes all literals and the transport filter the rest", "ipv6", "udp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{ServersFile: path, IPFamily: tt.family, Transports: tt.transports}
+			err := cfg.LoadServers()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "all 3 endpoint(s)")
+			assert.Contains(t, err.Error(), "-transports/-ip-family")
+		})
+	}
+}

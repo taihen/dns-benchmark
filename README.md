@@ -60,10 +60,10 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
 - **Output:**
   - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
   - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed and inconclusive checks are warned about for every server, including the recommended one; the console shows `Inconclusive` for an enabled check without conclusive evidence (the `.com Latency` column shows `Fail` or `Inconclusive` instead of a latency). The summary and warnings are written with the table, including with `-o`.
-  - Row order: custom and system endpoints come first, sorted by score, followed by catalogue endpoints grouped by transport and IP family (for example `DoH / ipv4`, then `DoT / ipv4`, then `UDP / ipv4`) and sorted by score within each group. The first row is not necessarily the fastest endpoint overall; use the recommendations or sort by score.
+  - Row order (console, CSV and JSON): custom and system endpoints come first, sorted by score, followed by catalogue endpoints grouped by transport and IP family (for example `DoH / ipv4`, then `DoT / ipv4`, then `UDP / ipv4`) and sorted by score within each group. The first row (`.results[0]` in JSON) is not necessarily the fastest endpoint overall; use the recommendations or sort by score.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
-  - Option to write output to a file (`-o <filename>`). The path is opened before the benchmark starts, so an unwritable path fails immediately; an existing file is replaced only once results are ready.
+  - Option to write output to a file (`-o <filename>`). The path is opened before the benchmark starts, so an unwritable path fails immediately; results are written to a temporary file in the same directory and renamed over the target once complete, so a run that fails or is killed leaves an existing file unchanged (Ctrl+C still writes the partial results).
 - **Interactive Runs:**
   - Live progress line on stderr when attached to a terminal.
   - Ctrl+C stops the benchmark early and reports the results collected so far (exit code 130). Skipped probes are excluded from reliability and score (including an unsent `.com` probe), skipped latency probes are shown as `skippedQueries` in JSON, and servers that were never probed read `N/A` instead of 0% reliability.
@@ -171,8 +171,11 @@ profiles without documented probes report `not_applicable`. Policy probes never
 contribute latency samples.
 
 **Breaking change:** JSON schema version **2** changes the top-level array to an
-envelope. Consumers that read the old array (for example `jq '.[0]'`) should read
-`.results` instead:
+envelope. Consumers that read the old array should read `.results` instead. The
+rows are grouped by transport and IP family (see Row order above), so
+`.results[0]` is no longer the fastest endpoint; select by score instead, for
+example `jq '.results | map(select(.score != null)) | min_by(.score)'`
+(unrankable endpoints have `"score": null`):
 
 ```json
 {"schemaVersion":"2","metadata":{"startedAt":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":20,"interrupted":false},"results":[...]}
