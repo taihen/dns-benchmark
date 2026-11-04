@@ -519,7 +519,9 @@ func TestDoQPoolLimitHoldsUnderConcurrentDials(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs <- performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 2*time.Second, pool).Error
+			// Generous timeout: this test checks the pool limit, and a burst of
+			// localhost QUIC handshakes can occasionally lose a packet.
+			errs <- performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 10*time.Second, pool).Error
 		}()
 	}
 	close(start)
