@@ -80,7 +80,9 @@ type quicConnection struct {
 // quicConnectionPool manages QUIC connections for DoQ queries
 type quicConnectionPool struct {
 	mu           sync.RWMutex
-	connections  map[string][]*quicConnection // key: serverAddress
+	connections  map[string][]*quicConnection // key: serverAddress|serverName
+	dialing      map[string]int               // in-flight dials reserving pool slots
+	closed       bool
 	cleanup      chan struct{}
 	cleanupDone  chan struct{}
 	shutdownOnce sync.Once
@@ -89,6 +91,7 @@ type quicConnectionPool struct {
 func newQuicConnectionPool() *quicConnectionPool {
 	pool := &quicConnectionPool{
 		connections: make(map[string][]*quicConnection),
+		dialing:     make(map[string]int),
 		cleanup:     make(chan struct{}),
 		cleanupDone: make(chan struct{}),
 	}
@@ -144,60 +147,67 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 }
 
 // getConnection retrieves or creates a QUIC connection for the server.
-// The returned bool indicates whether the session is pooled.
+// The returned bool indicates whether the session is pooled. The pool lock is
+// never held while dialling, so an unreachable endpoint cannot delay queries
+// to other endpoints; in-flight dials reserve pool slots to keep the limit.
 func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	key := serverAddr + "|" + tlsConfig.ServerName
 
-	// Look for an available connection
-	if conns, exists := p.connections[serverAddr+"|"+tlsConfig.ServerName]; exists {
-		for _, conn := range conns {
-			// Check if connection is still valid and not in use
-			if !conn.inUse {
-				select {
-				case <-conn.session.Context().Done():
-					// Connection is closed, remove it
-					continue
-				default:
-					// Connection is still valid, mark as in use
-					conn.inUse = true
-					conn.lastUsed = time.Now()
-					return conn.session, true, nil
-				}
-			}
+	p.mu.Lock()
+	for _, conn := range p.connections[key] {
+		if conn.inUse {
+			continue
+		}
+		select {
+		case <-conn.session.Context().Done():
+			// Connection is closed; cleanup removes it.
+			continue
+		default:
+			conn.inUse = true
+			conn.lastUsed = time.Now()
+			p.mu.Unlock()
+			return conn.session, true, nil
 		}
 	}
+	// Reserve a pool slot when under the limit; otherwise dial a temporary
+	// connection that the caller closes after use.
+	pooled := !p.closed && len(p.connections[key])+p.dialing[key] < maxPooledConnections
+	if pooled {
+		p.dialing[key]++
+	}
+	p.mu.Unlock()
 
-	// No available connection, create a new one if under limit
-	if conns := p.connections[serverAddr+"|"+tlsConfig.ServerName]; len(conns) >= maxPooledConnections {
-		// Pool is full, create a temporary connection (not pooled)
-		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+
+	if !pooled {
 		if err != nil {
 			return nil, false, err
 		}
 		return session, false, nil
 	}
 
-	// Create new connection
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dialing[key]--
+	if p.dialing[key] == 0 {
+		delete(p.dialing, key)
+	}
 	if err != nil {
 		return nil, false, err
 	}
-
-	// Add to pool
-	conn := &quicConnection{
-		session:   session,
-		lastUsed:  time.Now(),
-		createdAt: time.Now(),
-		inUse:     true,
+	if p.closed {
+		// The pool shut down during the dial; hand back a temporary session.
+		return session, false, nil
 	}
-
-	p.connections[serverAddr+"|"+tlsConfig.ServerName] = append(p.connections[serverAddr+"|"+tlsConfig.ServerName], conn)
+	now := time.Now()
+	p.connections[key] = append(p.connections[key], &quicConnection{
+		session:   session,
+		lastUsed:  now,
+		createdAt: now,
+		inUse:     true,
+	})
 	return session, true, nil
 }
 
@@ -230,6 +240,7 @@ func (p *quicConnectionPool) closeAllConnections() {
 		}
 	}
 	p.connections = make(map[string][]*quicConnection)
+	p.closed = true
 }
 
 // shutdownPool gracefully shuts down the connection pool

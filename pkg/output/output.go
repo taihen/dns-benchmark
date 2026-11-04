@@ -97,13 +97,15 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 	return slice
 }
 
-// sortServerResults sorts results by comparison group, then by composite Score
-// ascending within each group (lower is better). Unrankable servers (+Inf) sort
+// sortServerResults sorts catalogue results by ranking group (transport and IP
+// family), then by composite Score ascending within each group (lower is
+// better). Endpoints without catalogue metadata keep the original score-only
+// ordering and sort ahead of catalogue groups. Unrankable servers (+Inf) sort
 // last in their group; ties break by ServerAddress, then EndpointID, for
 // deterministic output.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
-		if gi, gj := results[i].ComparisonGroup(), results[j].ComparisonGroup(); gi != gj {
+		if gi, gj := sortGroup(results[i]), sortGroup(results[j]); gi != gj {
 			return gi < gj
 		}
 		si, sj := results[i].Score, results[j].Score
@@ -115,6 +117,13 @@ func sortServerResults(results []*analysis.ServerResult) {
 		}
 		return results[i].EndpointID < results[j].EndpointID
 	})
+}
+
+func sortGroup(res *analysis.ServerResult) string {
+	if res.CatalogVersion == "" {
+		return ""
+	}
+	return res.RankingGroup()
 }
 
 // buildHeader constructs the header row for console output.
@@ -548,44 +557,71 @@ type JSONReport struct {
 	Results       []JSONServerResult   `json:"results"`
 }
 
-// printSummary prints recommendations. Catalogue endpoints are compared only
-// within their ComparisonGroup (matching policy, roles, ECS, transport and IP
-// family). Endpoints without catalogue metadata (-f entries and system DNS) have
-// no documented policy, so they are summarised together with the original
-// single "Conclusion"; a run made only of such endpoints prints exactly that.
+// printSummary prints recommendations. Catalogue endpoints are ranked across
+// providers within each RankingGroup (transport and IP family), and each line
+// names the winner's filtering policy so the trade-off stays visible. Where at
+// least two catalogue endpoints share a ComparisonGroup (matching policy, roles,
+// ECS, transport and IP family), the fastest like-for-like endpoint is also
+// reported; single-member policy groups are omitted because they compare
+// nothing. Endpoints without catalogue metadata (-f entries and system DNS) are
+// summarised together with the original single "Conclusion"; a run made only of
+// such endpoints prints exactly that.
 func printSummary(writer io.Writer, results []*analysis.ServerResult, cfg *config.Config) {
-	groups := map[string][]*analysis.ServerResult{}
+	rankingGroups := map[string][]*analysis.ServerResult{}
+	policyGroups := map[string][]*analysis.ServerResult{}
 	var uncatalogued []*analysis.ServerResult
 	for _, res := range results {
 		if res.CatalogVersion == "" {
 			uncatalogued = append(uncatalogued, res)
 			continue
 		}
-		groups[res.ComparisonGroup()] = append(groups[res.ComparisonGroup()], res)
+		rankingGroups[res.RankingGroup()] = append(rankingGroups[res.RankingGroup()], res)
+		policyGroups[res.ComparisonGroup()] = append(policyGroups[res.ComparisonGroup()], res)
 	}
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
+	if len(rankingGroups) == 0 {
+		printSingleGroupSummary(writer, uncatalogued, cfg)
+		return
 	}
-	sort.Strings(keys)
-	if len(keys) > 0 {
-		_, _ = fmt.Fprintln(writer, "\n--- Recommendations by comparison group ---")
-	}
-	for _, key := range keys {
-		group := groups[key]
+
+	_, _ = fmt.Fprintln(writer, "\n--- Recommendations by transport and IP family ---")
+	for _, key := range sortedKeys(rankingGroups) {
+		group := rankingGroups[key]
 		best := findBestServer(group, cfg)
 		if best != nil {
-			_, _ = fmt.Fprintf(writer, "Fastest %s: %s (%s), %s, score %s\n", key, best.Provider, best.Profile, best.ServerAddress, formatScore(best.Score))
+			_, _ = fmt.Fprintf(writer, "Fastest %s: %s (%s, policy %s), %s, score %s\n", key, best.Provider, best.Profile, best.FilteringPolicy, best.ServerAddress, formatScore(best.Score))
 		} else {
 			_, _ = fmt.Fprintf(writer, "No rankable server for %s.\n", key)
 		}
 		printServerWarnings(writer, group, best, cfg)
 	}
-	if len(keys) == 0 {
-		printSingleGroupSummary(writer, uncatalogued, cfg)
-		return
+
+	headerPrinted := false
+	for _, key := range sortedKeys(policyGroups) {
+		group := policyGroups[key]
+		if len(group) < 2 {
+			continue
+		}
+		best := findBestServer(group, cfg)
+		if best == nil {
+			continue
+		}
+		if !headerPrinted {
+			_, _ = fmt.Fprintln(writer, "\n--- Fastest within matching policy groups ---")
+			headerPrinted = true
+		}
+		_, _ = fmt.Fprintf(writer, "Fastest %s: %s (%s), %s, score %s\n", key, best.Provider, best.Profile, best.ServerAddress, formatScore(best.Score))
 	}
+
 	printConclusion(writer, "\n--- Conclusion (system and custom endpoints, no catalogue policy) ---", uncatalogued, cfg)
+}
+
+func sortedKeys(groups map[string][]*analysis.ServerResult) []string {
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func catalogVersion(results *analysis.BenchmarkResults) string {

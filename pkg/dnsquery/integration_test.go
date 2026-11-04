@@ -348,3 +348,145 @@ func TestFilteringProbeStates(t *testing.T) {
 		})
 	}
 }
+
+// serveDoQ answers every DoQ stream on listener with fixtureReply until ctx ends.
+func serveDoQ(ctx context.Context, listener *quic.Listener) {
+	for {
+		connection, err := listener.Accept(ctx)
+		if err != nil {
+			return
+		}
+		go func() {
+			for {
+				stream, err := connection.AcceptStream(ctx)
+				if err != nil {
+					return
+				}
+				go func() {
+					defer func() { _ = stream.Close() }()
+					var size uint16
+					if binary.Read(stream, binary.BigEndian, &size) != nil {
+						return
+					}
+					packet := make([]byte, size)
+					if _, err := io.ReadFull(stream, packet); err != nil {
+						return
+					}
+					q := new(dns.Msg)
+					if q.Unpack(packet) != nil {
+						return
+					}
+					reply, err := fixtureReply(q).Pack()
+					if err != nil {
+						return
+					}
+					_ = binary.Write(stream, binary.BigEndian, uint16(len(reply)))
+					_, _ = stream.Write(reply)
+				}()
+			}
+		}()
+	}
+}
+
+func startDoQFixture(t *testing.T) (string, *x509.CertPool) {
+	t.Helper()
+	certificate, roots := fixtureCertificate(t)
+	listener, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{certificate}, NextProtos: []string{"doq"}, MinVersion: tls.VersionTLS13}, nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		_ = listener.Close()
+	})
+	go serveDoQ(ctx, listener)
+	return listener.Addr().String(), roots
+}
+
+// TestDoQPoolDialDoesNotBlockOtherEndpoints checks that a dial to an
+// unreachable DoQ endpoint does not hold the pool and delay healthy endpoints.
+func TestDoQPoolDialDoesNotBlockOtherEndpoints(t *testing.T) {
+	healthy, roots := startDoQFixture(t)
+	// A bound UDP socket that never reads: QUIC handshakes to it stall.
+	blackhole, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = blackhole.Close() }()
+
+	pool := newQuicConnectionPool()
+	defer pool.shutdownPool()
+	ctx := context.Background()
+	server := func(address string) config.ServerInfo {
+		return config.ServerInfo{Address: address, TLSRootCAs: roots, Metadata: catalog.Metadata{TLSServerName: "resolver.fixture"}}
+	}
+
+	stalled := make(chan QueryResult, 1)
+	go func() {
+		stalled <- performDoQQuery(ctx, server(blackhole.LocalAddr().String()), "example.test", dns.TypeA, 3*time.Second, pool)
+	}()
+	time.Sleep(100 * time.Millisecond) // let the stalled dial start first
+
+	start := time.Now()
+	result := performDoQQuery(ctx, server(healthy), "example.test", dns.TypeA, 2*time.Second, pool)
+	elapsed := time.Since(start)
+	require.NoError(t, result.Error)
+	assert.Less(t, elapsed, time.Second, "healthy endpoint waited on the stalled dial")
+	assert.Error(t, (<-stalled).Error)
+}
+
+// TestDoQPoolLimitHoldsUnderConcurrentDials checks that concurrent first
+// queries to one endpoint never pool more than maxPooledConnections sessions.
+func TestDoQPoolLimitHoldsUnderConcurrentDials(t *testing.T) {
+	address, roots := startDoQFixture(t)
+	pool := newQuicConnectionPool()
+	defer pool.shutdownPool()
+	info := config.ServerInfo{Address: address, TLSRootCAs: roots, Metadata: catalog.Metadata{TLSServerName: "resolver.fixture"}}
+
+	const queries = 3 * maxPooledConnections
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, queries)
+	for range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- performDoQQuery(context.Background(), info, "example.test", dns.TypeA, 2*time.Second, pool).Error
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		assert.NoError(t, err)
+	}
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	assert.LessOrEqual(t, len(pool.connections[address+"|resolver.fixture"]), maxPooledConnections)
+	assert.Empty(t, pool.dialing)
+	for _, conn := range pool.connections[address+"|resolver.fixture"] {
+		assert.False(t, conn.inUse)
+	}
+}
+
+func TestCombineProbeStates(t *testing.T) {
+	pass, fail, inconclusive := analysis.Pass, analysis.Fail, analysis.Inconclusive
+	tests := []struct {
+		name     string
+		states   []analysis.CheckState
+		expected int
+		want     analysis.CheckState
+	}{
+		{"all passed", []analysis.CheckState{pass, pass}, 2, pass},
+		{"fail with a missing probe stays fail", []analysis.CheckState{fail}, 2, fail},
+		{"fail after a pass", []analysis.CheckState{pass, fail}, 2, fail},
+		{"fail beats inconclusive", []analysis.CheckState{inconclusive, fail}, 2, fail},
+		{"pass with a missing probe is inconclusive", []analysis.CheckState{pass}, 2, inconclusive},
+		{"pass and inconclusive", []analysis.CheckState{pass, inconclusive}, 2, inconclusive},
+		{"no probes yet", nil, 2, inconclusive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, combineProbeStates(tt.states, tt.expected))
+		})
+	}
+}

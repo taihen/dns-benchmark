@@ -46,7 +46,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **Uncached Latency:** Average and Standard Deviation for resolving random names that are unique per endpoint and per run, so they are likely uncached.
   - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
   - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
-  - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks results within matching filtering-policy, role, ECS, transport, and IP-family groups. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
+  - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks catalogue results across providers within each transport and IP-family group, alongside each result's filtering policy. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
@@ -58,8 +58,8 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Include system-configured DNS servers (UDP only) (`-system` flag, default: true unless `-f` is used).
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
-  - Formatted console table grouped by policy and transport, with composite scores sorted within each group.
-  - Console recommendations for each policy/transport/family group, with confirmed accuracy when the accuracy check is enabled.
+  - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
+  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy is confirmed when the accuracy check is enabled.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
@@ -140,7 +140,8 @@ JSON schema version **2** changes the top-level array to an envelope:
 ```
 
 Each result includes provider, profile, roles, endpoint ID, family, transport,
-TLS name, catalogue version, source URLs, comparison group, explicit probe states
+TLS name, catalogue version, source URLs, comparison group (empty for custom and
+system endpoints), explicit probe states
 (`pass`, `fail`, `inconclusive`, `not_applicable`), and separate truncation,
 transport, timeout, malformed-response, RCODE, and EDE policy counters. Existing
 boolean check fields remain compatibility aliases. `serverAddress` (and the first

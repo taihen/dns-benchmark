@@ -57,10 +57,10 @@ func initialCheckStates(cfg *config.Config, servers ...config.ServerInfo) map[st
 	return checks
 }
 
+// combineProbeStates merges per-domain probe states. Any observed Fail is
+// conclusive even when other probes are missing or inconclusive; Pass requires
+// all expected probes to pass.
 func combineProbeStates(states []analysis.CheckState, expected int) analysis.CheckState {
-	if len(states) < expected {
-		return analysis.Inconclusive
-	}
 	state := analysis.Pass
 	for _, s := range states {
 		if s == analysis.Fail {
@@ -69,6 +69,9 @@ func combineProbeStates(states []analysis.CheckState, expected int) analysis.Che
 		if s == analysis.Inconclusive {
 			state = s
 		}
+	}
+	if len(states) < expected {
+		return analysis.Inconclusive
 	}
 	return state
 }

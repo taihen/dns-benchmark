@@ -243,11 +243,24 @@ type RunMetadata struct {
 	Interrupted      bool      `json:"interrupted"`
 }
 
-// ComparisonGroup limits ranking to matching policy, transport and IP family.
-// Provider and profile remain attached to every individual measurement.
+// ComparisonGroup identifies catalogue endpoints with matching filtering
+// policy, roles, ECS, transport and IP family. It is empty for endpoints
+// without catalogue metadata (-f entries and system DNS), which have no
+// documented policy.
 func (sr *ServerResult) ComparisonGroup() string {
-	if sr.Profile == "" {
+	if sr.CatalogVersion == "" {
 		return ""
 	}
 	return strings.Join([]string{sr.FilteringPolicy, strings.Join(sr.Roles, "+"), sr.ECS, sr.Protocol, sr.IPFamily}, " / ")
+}
+
+// RankingGroup identifies endpoints whose latency is directly comparable:
+// the same transport over the same IP family. Rankings span providers and
+// policies within a RankingGroup, with policy shown alongside each result.
+func (sr *ServerResult) RankingGroup() string {
+	family := sr.IPFamily
+	if family == "" {
+		family = "auto"
+	}
+	return sr.Protocol + " / " + family
 }
