@@ -157,7 +157,9 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 // The returned bool indicates whether the session is pooled. The pool lock is
 // never held while dialling, so an unreachable endpoint cannot delay queries
 // to other endpoints; in-flight dials reserve pool slots to keep the limit.
-func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, bool, error) {
+// handshakeTimeout bounds the QUIC handshake idle time so the user's -timeout
+// applies instead of quic-go's 5s default.
+func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config, handshakeTimeout time.Duration) (*quic.Conn, bool, error) {
 	key := serverAddr + "|" + tlsConfig.ServerName
 
 	p.mu.Lock()
@@ -186,7 +188,7 @@ func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr strin
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, &quic.Config{HandshakeIdleTimeout: handshakeTimeout})
 
 	if !pooled {
 		if err != nil {
@@ -433,7 +435,7 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	}
 	startTime := time.Now()
 	// Get QUIC connection from pool
-	session, pooled, err := pool.getConnection(ctx, serverAddress, tlsConfig)
+	session, pooled, err := pool.getConnection(ctx, serverAddress, tlsConfig, timeout)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to get connection for %s: %w", serverInfo.Address, err)}
 	}
