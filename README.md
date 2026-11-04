@@ -107,9 +107,9 @@ connect to catalogue IPs while authenticating documented TLS hostnames.
 Existing `-f` files still accept IPs, hostnames, IPv6 literals, ports, and the
 `udp://`, `tcp://`, `tls://`, `https://`, and `quic://` prefixes. File entries carry
 `custom` provider/profile metadata. As before, an unrecognised scheme (for example
-`dns://1.2.3.4`) is treated as UDP and a non-numeric port falls back to the
-protocol default, each with a warning. `http://` entries and out-of-range ports
-are rejected, since they could never have been benchmarked as written. `-f` disables
+`dns://1.2.3.4`) is treated as UDP and a non-numeric port (including a negative
+one such as `:-1`) falls back to the protocol default, each with a warning.
+`http://` entries and ports outside 1–65535 (such as `:0`) are rejected, since they could never have been benchmarked as written. `-f` disables
 system DNS and cannot be combined with explicit catalogue profiles or presets.
 System resolvers that are already selected catalogue endpoints (for example
 `1.1.1.1`) are benchmarked once, as the catalogue entry.
