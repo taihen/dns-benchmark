@@ -45,13 +45,13 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **Cached Latency:** Average and Standard Deviation for resolving likely cached domains.
   - **Uncached Latency:** Average and Standard Deviation for resolving random names that are unique per endpoint and per run, so they are likely uncached.
   - **Reliability:** Percentage of latency probes that returned a structurally valid DNS response. Unexpected DNS rcodes are reported separately as DNS failures.
-  - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
+  - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag). A server whose probe fails (any answer other than NXDOMAIN) or is inconclusive (timeout, transport error, truncation) is reported with a warning and is never recommended, since the missing sample would otherwise drop out of its score.
   - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks catalogue results across providers within each transport and IP-family group, alongside each result's filtering policy. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
   - **DNSSEC Validation:** Checks if the resolver rejects a deliberately broken signed domain, using a correctly signed control domain (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
   - **DNS Rebinding Protection:** Checks if the resolver strips private A and AAAA answers (`-rebinding` flag, default: false; requires `-rebinding-domain`).
-  - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
+  - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag). A missing or unreadable file, or one with no valid entry, is an error.
 - **Configuration:**
   - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
   - Provide a custom list of servers via file (`-f <filename>`), including protocol prefixes.
@@ -59,7 +59,7 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - Adjust number of queries (`-n`, default: 50), timeout (`-t`), concurrency (`-c`), and rate limit (`-rate`).
 - **Output:**
   - Formatted console table grouped by transport and IP family, with composite scores sorted within each group. Custom and system endpoints keep score-only ordering.
-  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy is confirmed when the accuracy check is enabled.
+  - Console recommendations: the fastest endpoint per transport and IP family (naming its filtering policy), plus the fastest like-for-like endpoint for each policy, role, ECS, transport and family group with at least two members. Accuracy (with `-accuracy-file`) and a successful `.com` probe (with `-dotcom`) are required for a recommendation. Failed checks are warned about for every server, including the recommended one.
   - CSV output (`-format csv`).
   - JSON output (`-format json`).
   - Option to write output to a file (`-o <filename>`).
@@ -81,8 +81,9 @@ address. DNS.WATCH has no encrypted endpoints; the additional OpenDNS profiles
 currently include DoH and Do53 while their DoT documentation awaits verification.
 
 The default `-preset legacy` retains six providers and 18 IPv4 UDP/DoT/DoH
-endpoints, plus system DNS unless disabled. Other presets select profiles by role:
-`general`, `security`, `family`, and `extended`. General profiles can still have
+endpoints, plus system DNS unless disabled. The `general`, `security` and
+`family` presets select profiles with that role; `extended` selects every active
+profile, including the `ads` and `social` profiles that no role preset covers. General profiles can still have
 legal blocking requirements (DNS4EU uses `legal-only`), so their scores stay in a
 separate policy group. Quad9 ECS variants retain their own ECS dimension.
 
@@ -98,7 +99,9 @@ separate policy group. Quad9 ECS variants retain their own ECS dimension.
 ```
 
 `-profile` accepts comma-separated stable profile IDs and overrides the preset.
-`-transports` accepts `udp,tcp,dot,doh,doq`. DoQ is distinct from HTTP/3; HTTP/3 and
+`-transports` accepts `udp,tcp,dot,doh,doq`. It defaults to `udp,dot,doh` for the
+`legacy`, `general`, `security` and `family` presets, and to all five transports
+for `extended` and `-profile` selections. DoQ is distinct from HTTP/3; HTTP/3 and
 DNSCrypt are not implemented. `-ip-family auto` selects both families for explicit
 catalogue selections; the legacy default selects IPv4. DoH connects directly to
 its URL hostname using the selected family, without an HTTP proxy; DoT and DoQ
@@ -150,7 +153,7 @@ envelope. Consumers that read the old array (for example `jq '.[0]'`) should rea
 `.results` instead:
 
 ```json
-{"schemaVersion":"2","metadata":{"timestamp":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":18,"interrupted":false},"results":[]}
+{"schemaVersion":"2","metadata":{"startedAt":"...","queryCorpusId":"sha256:...","requestedQueryCount":50,"skippedCount":0,"warmupQueryCount":18,"interrupted":false},"results":[]}
 ```
 
 Each result includes provider, profile, roles, endpoint ID, family, transport,
@@ -162,7 +165,7 @@ boolean check fields remain compatibility aliases. `serverAddress` (and the firs
 CSV column) keeps the protocol-prefixed form accepted by `-f`, for example
 `1.1.1.1:53`, `tls://one.one.one.one:853` or a DoH URL; use `endpointId` to tell
 apart catalogue endpoints that share an address string across IP families. CSV appends identity, policy,
-probe state, and skipped-query columns after the existing metric columns.
+probe state (including `DotcomState`), and skipped-query columns after the existing metric and check columns.
 Machine-readable stdout contains only JSON or CSV; progress goes to stderr.
 
 Catalogue structure is validated on every load. Review freshness is a maintenance
