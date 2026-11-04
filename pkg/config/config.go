@@ -10,8 +10,10 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/taihen/dns-benchmark/pkg/catalog"
@@ -137,10 +139,19 @@ type Config struct {
 	ShowVersion         bool
 }
 
-// DefaultDNSStrings exposes the historical endpoint string format.
+// DefaultDNSStrings returns the legacy preset's IPv4 UDP, DoT and DoH endpoints
+// in the historical string format. DoT entries now use the provider's TLS
+// name (for example tls://one.one.one.one) rather than an IP literal. The
+// catalogue is loaded on first call, not at package init, so -version and
+// other paths that never need it cannot fail on it.
 //
 // Deprecated: use Config.LoadServers to retain catalogue metadata and TLS names.
-var DefaultDNSStrings = legacyEndpointStrings()
+func DefaultDNSStrings() ([]string, error) {
+	entries, err := defaultDNSStrings()
+	return slices.Clone(entries), err
+}
+
+var defaultDNSStrings = sync.OnceValues(legacyEndpointStrings)
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
 func LoadConfig() *Config {

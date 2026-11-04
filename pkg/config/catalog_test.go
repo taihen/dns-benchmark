@@ -52,8 +52,10 @@ func TestLegacyPresetKeepsAddressFormat(t *testing.T) {
 		addresses = append(addresses, s.AddressString())
 		assert.Contains(t, s.String(), s.EndpointID, "results key must stay unique per endpoint")
 	}
+	defaults, err := DefaultDNSStrings()
+	require.NoError(t, err)
 	var want []string
-	for _, entry := range DefaultDNSStrings {
+	for _, entry := range defaults {
 		s, err := parseServerString(entry)
 		require.NoError(t, err)
 		want = append(want, s.AddressString())
@@ -156,5 +158,7 @@ func TestSystemDNSDeduplicatedAgainstCatalogue(t *testing.T) {
 }
 
 func TestDefaultDNSStringsPopulated(t *testing.T) {
-	assert.Len(t, DefaultDNSStrings, 18)
+	entries, err := DefaultDNSStrings()
+	require.NoError(t, err)
+	assert.Len(t, entries, 18)
 }

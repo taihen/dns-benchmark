@@ -172,17 +172,16 @@ func endpointKey(s ServerInfo) string {
 }
 
 // legacyEndpointStrings renders the legacy preset in the historical string
-// format. The catalogue is embedded at build time, so a load or selection
-// failure is a build defect; it panics rather than leaving DefaultDNSStrings
-// silently empty.
-func legacyEndpointStrings() []string {
+// format. The catalogue is embedded at build time, so an error here means a
+// build defect; it is returned rather than leaving the list silently empty.
+func legacyEndpointStrings() ([]string, error) {
 	c, err := catalog.Load()
 	if err != nil {
-		panic(fmt.Sprintf("dns-benchmark: %v", err))
+		return nil, fmt.Errorf("load catalogue: %w", err)
 	}
 	profiles, err := c.Select("legacy", "")
 	if err != nil {
-		panic(fmt.Sprintf("dns-benchmark: select legacy preset: %v", err))
+		return nil, fmt.Errorf("select legacy preset: %w", err)
 	}
 	var entries []string
 	for _, p := range profiles {
@@ -200,5 +199,5 @@ func legacyEndpointStrings() []string {
 			}
 		}
 	}
-	return entries
+	return entries, nil
 }
