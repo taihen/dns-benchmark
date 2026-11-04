@@ -1030,9 +1030,10 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 	case "dotcom":
 		// The probe name does not exist, so NXDOMAIN is the only correct answer.
 		// A fast SERVFAIL or REFUSED is a failure, not a latency sample. Errors
-		// and truncation stay inconclusive. Either way the server is not
-		// recommended (see output.findBestServer), so a failed probe cannot
-		// improve its standing by dropping out of the score.
+		// and truncation stay inconclusive. Either way the server's score is
+		// +Inf (see analysis.computeScore) and it is not recommended (see
+		// output.findBestServer), so a failed probe cannot improve its standing
+		// by dropping out of the score.
 		if conclusiveResponse(res.result) {
 			if res.result.Response.Rcode == dns.RcodeNameError {
 				latency := res.result.Latency

@@ -169,8 +169,14 @@ func durationMs(d time.Duration) float64 {
 // renormalizing over whichever metrics have data, then divides by the effective
 // reliability (probe success rate minus the wrong-rcode DNS-failure rate).
 // It returns math.Inf(1) when the server cannot be ranked: no latency samples,
-// no queries attempted, or zero effective reliability.
+// no queries attempted, zero effective reliability, or an enabled .com check
+// that did not pass. Renormalising over the remaining weights in that last case
+// would let a server whose .com probe failed or timed out outscore one that
+// answered it slowly.
 func computeScore(sr *ServerResult) float64 {
+	if state, ok := sr.Checks["dotcom"]; ok && state != NotApplicable && state != Pass {
+		return math.Inf(1)
+	}
 	var weightedSum, weightTotal float64
 	if len(sr.UncachedLatencies) > 0 {
 		weightedSum += weightUncached * durationMs(sr.AvgUncachedLatency)

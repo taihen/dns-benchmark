@@ -268,6 +268,44 @@ func TestComputeScore(t *testing.T) {
 			want: 10.0 / 0.7,
 		},
 		{
+			name: "dotcom check failed is unrankable",
+			// Dropping the dotcom weight would renormalise to a better score
+			// than a server whose probe answered slowly.
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       2,
+				Checks:             map[string]CheckState{"dotcom": Fail},
+			},
+			want: math.Inf(1),
+		},
+		{
+			name: "dotcom check inconclusive is unrankable",
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       2,
+				Checks:             map[string]CheckState{"dotcom": Inconclusive},
+			},
+			want: math.Inf(1),
+		},
+		{
+			name: "dotcom check disabled renormalises",
+			sr: ServerResult{
+				CachedLatencies:    []time.Duration{ms(10)},
+				UncachedLatencies:  []time.Duration{ms(10)},
+				AvgCachedLatency:   ms(10),
+				AvgUncachedLatency: ms(10),
+				TotalQueries:       2,
+				Checks:             map[string]CheckState{"dotcom": NotApplicable},
+			},
+			want: 10.0,
+		},
+		{
 			name: "no latency samples is unrankable",
 			sr:   ServerResult{TotalQueries: 10},
 			want: math.Inf(1),
