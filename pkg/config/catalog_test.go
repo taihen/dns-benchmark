@@ -73,10 +73,66 @@ func TestLegacyFileMetadata(t *testing.T) {
 	require.NoError(t, cfg.LoadServers())
 	assert.False(t, cfg.IncludeSystemDNS)
 	assert.Len(t, cfg.Servers, 5)
+	tlsNames := map[string]string{}
 	for _, s := range cfg.Servers {
 		assert.Equal(t, "custom", s.Provider)
 		assert.Equal(t, "custom", s.Profile)
+		tlsNames[s.AddressString()] = s.TLSServerName
 	}
+	// Plaintext transports have no TLS name to report.
+	assert.Equal(t, map[string]string{
+		"1.1.1.1:53":                         "",
+		"tcp://[::1]:5353":                   "",
+		"tls://resolver.example:853":         "resolver.example",
+		"https://resolver.example/dns-query": "resolver.example",
+		"quic://resolver.example:853":        "resolver.example",
+	}, tlsNames)
+}
+
+func TestCustomTLSServerName(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  string
+	}{
+		{"tls://dns.example", "dns.example"},
+		{"tls://1.1.1.1", ""},
+		{"quic://[2606:4700::1111]", ""},
+		{"https://1.1.1.1/dns-query", ""},
+		{"https://dns.example/dns-query", "dns.example"},
+		{"dns.example", ""},
+		{"tcp://dns.example", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			info, err := parseServerString(tt.entry)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, customTLSServerName(info))
+		})
+	}
+}
+
+func TestLegacyFileSelectionErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "servers.txt")
+	require.NoError(t, os.WriteFile(path, []byte("1.1.1.1\ntls://dns.example\n"), 0600))
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{"with preset", Config{ServersFile: path, Preset: "general"}, "-f cannot be combined"},
+		{"with profile", Config{ServersFile: path, Profiles: "cloudflare-default"}, "-f cannot be combined"},
+		{"filtered to nothing", Config{ServersFile: path, Transports: "doq"}, "no endpoints match"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.ErrorContains(t, tt.cfg.LoadServers(), tt.wantErr)
+		})
+	}
+
+	cfg := Config{ServersFile: path, Transports: "dot"}
+	require.NoError(t, cfg.LoadServers())
+	require.Len(t, cfg.Servers, 1)
+	assert.Equal(t, DOT, cfg.Servers[0].Protocol)
 }
 
 func TestRejectMalformedEndpoints(t *testing.T) {

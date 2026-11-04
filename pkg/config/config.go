@@ -207,13 +207,8 @@ func LoadConfig() *Config {
 	if cfg.AccuracyCheckFile != "" {
 		domain, ip, err := loadAccuracyCheckFile(cfg.AccuracyCheckFile)
 		if err != nil {
-			fmt.Fprintf(
-				os.Stderr,
-				"Warning: Could not load accuracy check file %s: %v. Disabling check.\n",
-				cfg.AccuracyCheckFile,
-				err,
-			)
-			cfg.AccuracyCheckFile = ""
+			fmt.Fprintf(os.Stderr, "Error: could not load accuracy check file %s: %v\n", cfg.AccuracyCheckFile, err)
+			os.Exit(1)
 		} else {
 			cfg.AccuracyCheckDomain = domain
 			cfg.AccuracyCheckIP = ip
@@ -455,7 +450,7 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid server endpoint '%s': %v\n", s, err)
 			continue // Skip adding this server
 		}
-		info.Metadata = catalog.Metadata{Provider: "custom", Profile: "custom", Roles: []string{"custom"}, FilteringPolicy: "unknown", ECS: "unknown", IPFamily: addressFamily(info.Hostname), Transport: string(info.Protocol), TLSServerName: info.Hostname}
+		info.Metadata = catalog.Metadata{Provider: "custom", Profile: "custom", Roles: []string{"custom"}, FilteringPolicy: "unknown", ECS: "unknown", IPFamily: addressFamily(info.Hostname), Transport: string(info.Protocol), TLSServerName: customTLSServerName(info)}
 		// Deduplicate entries by protocol+address, allowing same address under different protocols
 		key := endpointKey(info)
 		if _, exists := seen[key]; !exists {
@@ -576,4 +571,17 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 	}
 	// If no scanner error and no valid line found, return the specific error
 	return "", "", fmt.Errorf("no valid 'domain IP' pairs found in %s", filePath)
+}
+
+// customTLSServerName returns the name a custom -f endpoint authenticates as:
+// its hostname for TLS transports (DoT, DoH, DoQ), and empty for plaintext
+// transports or IP-literal hosts, which have no TLS name to report.
+func customTLSServerName(info ServerInfo) string {
+	switch info.Protocol {
+	case DOT, DOH, DOQ:
+		if net.ParseIP(info.Hostname) == nil {
+			return info.Hostname
+		}
+	}
+	return ""
 }
