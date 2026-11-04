@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -96,16 +97,44 @@ func TestLocalDNSWireTransports(t *testing.T) {
 	}
 }
 
+// paddedReply returns a valid packed reply to query whose total size is
+// exactly size bytes, using EDNS0 padding (RFC 7830).
+func paddedReply(t *testing.T, query *dns.Msg, size int) []byte {
+	t.Helper()
+	reply := fixtureReply(query)
+	reply.SetEdns0(4096, false)
+	base, err := reply.Pack()
+	require.NoError(t, err)
+	padding := size - len(base) - 4 // option code and length
+	require.GreaterOrEqual(t, padding, 0)
+	opt := reply.IsEdns0()
+	opt.Option = append(opt.Option, &dns.EDNS0_PADDING{Padding: make([]byte, padding)})
+	packed, err := reply.Pack()
+	require.NoError(t, err)
+	require.Len(t, packed, size)
+	return packed
+}
+
 func TestLocalDoHWireAndValidation(t *testing.T) {
-	for _, tt := range []struct {
-		name, contentType string
-		oversize, fail    bool
+	const limit = 65535
+	tests := []struct {
+		name        string
+		contentType string
+		body        func(t *testing.T, q *dns.Msg) []byte
+		wantReason  string // empty means the query must succeed
 	}{
-		{"valid", "application/dns-message", false, false},
-		{"invalid type", "text/html", false, true},
-		{"missing type", "", false, true},
-		{"oversize", "application/dns-message", true, true},
-	} {
+		{name: "valid", contentType: "application/dns-message"},
+		{name: "valid at the size limit", contentType: "application/dns-message", body: func(t *testing.T, q *dns.Msg) []byte { return paddedReply(t, q, limit) }},
+		{name: "invalid type", contentType: "text/html", wantReason: "invalid DoH content type"},
+		{name: "missing type", contentType: "", wantReason: "invalid DoH content type"},
+		{
+			// A well-formed DNS message one byte over the limit, so only the
+			// size bound can reject it.
+			name: "valid message one byte over the limit", contentType: "application/dns-message", wantReason: "exceeds 65535 bytes",
+			body: func(t *testing.T, q *dns.Msg) []byte { return paddedReply(t, q, limit+1) },
+		},
+	}
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				packet, _ := io.ReadAll(r.Body)
@@ -115,23 +144,64 @@ func TestLocalDoHWireAndValidation(t *testing.T) {
 					return
 				}
 				w.Header()["Content-Type"] = []string{tt.contentType}
-				if tt.oversize {
-					_, _ = w.Write(make([]byte, 65536))
-					return
+				body := fixtureReplyBytes(t, q)
+				if tt.body != nil {
+					body = tt.body(t, q)
 				}
-				reply, _ := fixtureReply(q).Pack()
-				_, _ = w.Write(reply)
+				_, _ = w.Write(body)
 			}))
 			defer server.Close()
-			result := performDoHQuery(context.Background(), config.ServerInfo{Address: server.URL}, "example.test", dns.TypeA, time.Second, server.Client())
-			if tt.fail {
-				assert.Error(t, result.Error)
-			} else {
+			result := performDoHQuery(context.Background(), config.ServerInfo{Address: server.URL}, "example.test", dns.TypeA, 5*time.Second, server.Client())
+			if tt.wantReason == "" {
 				require.NoError(t, result.Error)
 				assert.Len(t, result.Response.Answer, 1)
+				return
 			}
+			var validationErr *ResponseValidationError
+			require.ErrorAs(t, result.Error, &validationErr)
+			assert.Contains(t, validationErr.Reason, tt.wantReason)
+			assert.Equal(t, OutcomeMalformed, classifyQueryResult(result))
 		})
 	}
+}
+
+// TestLocalDoHStopsReadingOversizedBody checks that the client stops reading a
+// hostile, very large DoH body instead of buffering all of it.
+func TestLocalDoHStopsReadingOversizedBody(t *testing.T) {
+	const bodySize = 256 << 20 // far beyond any socket buffering
+	written := make(chan int64, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/dns-message")
+		n, _ := io.Copy(w, io.LimitReader(zeroReader{}, bodySize))
+		written <- n
+	}))
+	defer server.Close()
+
+	result := performDoHQuery(context.Background(), config.ServerInfo{Address: server.URL}, "example.test", dns.TypeA, 30*time.Second, server.Client())
+	var validationErr *ResponseValidationError
+	require.ErrorAs(t, result.Error, &validationErr)
+	assert.Contains(t, validationErr.Reason, "exceeds 65535 bytes")
+	select {
+	case n := <-written:
+		assert.Less(t, n, int64(bodySize), "client read the entire oversized body")
+	case <-time.After(10 * time.Second):
+		t.Fatal("server handler did not finish after the client gave up")
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func fixtureReplyBytes(t *testing.T, query *dns.Msg) []byte {
+	t.Helper()
+	packed, err := fixtureReply(query).Pack()
+	require.NoError(t, err)
+	return packed
 }
 
 func TestLocalDoQWireTransport(t *testing.T) {
@@ -487,6 +557,63 @@ func TestCombineProbeStates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, combineProbeStates(tt.states, tt.expected))
+		})
+	}
+}
+
+// TestNXDOMAINProbeAggregation feeds both NXDOMAIN probes through
+// processCheckResult and checks the combined verdict. A clean result needs two
+// conclusive NXDOMAIN answers; any hijacked answer is conclusive on its own.
+func TestNXDOMAINProbeAggregation(t *testing.T) {
+	request := new(dns.Msg)
+	request.SetQuestion("nx.example.test.", dns.TypeA)
+	nxdomain := new(dns.Msg)
+	nxdomain.SetRcode(request, dns.RcodeNameError)
+	hijacked := fixtureReply(request)
+	truncated := new(dns.Msg)
+	truncated.SetRcode(request, dns.RcodeNameError)
+	truncated.Truncated = true
+
+	type probe struct {
+		result  QueryResult
+		skipped bool
+	}
+	ok := probe{result: QueryResult{Response: nxdomain}}
+	hijack := probe{result: QueryResult{Response: hijacked}}
+	failed := probe{result: QueryResult{Error: errors.New("doh http request failed")}}
+	trunc := probe{result: QueryResult{Response: truncated}}
+	skipped := probe{skipped: true}
+
+	tests := []struct {
+		name      string
+		probes    []probe
+		wantValue *bool
+		wantState analysis.CheckState
+	}{
+		{"both NXDOMAIN", []probe{ok, ok}, boolPtr(false), analysis.Pass},
+		{"single probe only", []probe{ok}, nil, analysis.Inconclusive},
+		{"second probe errored", []probe{ok, failed}, nil, analysis.Inconclusive},
+		{"first probe errored", []probe{failed, ok}, nil, analysis.Inconclusive},
+		{"second probe skipped", []probe{ok, skipped}, nil, analysis.Inconclusive},
+		{"truncated probe is not evidence", []probe{ok, trunc}, nil, analysis.Inconclusive},
+		{"hijack then error", []probe{hijack, failed}, boolPtr(true), analysis.Fail},
+		{"error then hijack", []probe{failed, hijack}, boolPtr(true), analysis.Fail},
+		{"NXDOMAIN then hijack", []probe{ok, hijack}, boolPtr(true), analysis.Fail},
+		{"hijack then NXDOMAIN", []probe{hijack, ok}, boolPtr(true), analysis.Fail},
+		{"both errored", []probe{failed, failed}, nil, analysis.Inconclusive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			b := NewBenchmarker(&config.Config{CheckNXDOMAIN: true})
+			defer b.Close()
+			result := &analysis.ServerResult{Checks: map[string]analysis.CheckState{}}
+			b.Results.Results[server.String()] = result
+			for _, p := range tt.probes {
+				b.processCheckResult(queryJobResult{serverInfo: server, checkType: "nxdomain", result: p.result, skipped: p.skipped})
+			}
+			assert.Equal(t, tt.wantValue, result.HijacksNXDOMAIN)
+			assert.Equal(t, tt.wantState, result.Checks["nxdomain"])
 		})
 	}
 }
