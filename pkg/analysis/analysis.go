@@ -217,9 +217,13 @@ func (br *BenchmarkResults) Analyze() {
 type CheckState string
 
 const (
-	Pass          CheckState = "pass"
-	Fail          CheckState = "fail"
-	Inconclusive  CheckState = "inconclusive"
+	// Pass means the probe returned conclusive evidence of the desired behaviour.
+	Pass CheckState = "pass"
+	// Fail means the probe returned conclusive evidence of the undesired behaviour.
+	Fail CheckState = "fail"
+	// Inconclusive means the check ran but no conclusive response was obtained.
+	Inconclusive CheckState = "inconclusive"
+	// NotApplicable means the check was not run or does not apply to this endpoint.
 	NotApplicable CheckState = "not_applicable"
 )
 

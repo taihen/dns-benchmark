@@ -1270,8 +1270,10 @@ func checkRebindingProtection(result QueryResult) *bool {
 	return boolPtr(true) // NOERROR without address records
 }
 
-// checkResponseAccuracy checks if the DNS response is accurate by comparing the answer to an expected IP.
-// It verifies that at least one A record in the answer matches the expected IP address.
+// checkResponseAccuracy reports whether any A or AAAA answer matches one of the
+// comma-separated IPs in expectedIP. It returns nil (inconclusive) when the
+// response is unusable, the rcode is not NOERROR, expectedIP contains an
+// unparsable address, or the answer holds no address records.
 func checkResponseAccuracy(result QueryResult, expectedIP string) *bool {
 	if !conclusiveResponse(result) {
 		return nil
