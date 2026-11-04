@@ -362,12 +362,32 @@ func TestPrepareCheckJobs_UsesCurrentCheckDomains(t *testing.T) {
 	defer benchmarker.Close()
 
 	jobs := benchmarker.prepareCheckJobs([]config.ServerInfo{server})
-	require.Len(t, jobs, 3)
+	require.Len(t, jobs, 4)
 	assert.Equal(t, "dnssec-failed.org.", jobs[0].domain)
 	assert.Equal(t, "dnssec", jobs[0].checkType)
-	assert.True(t, strings.HasPrefix(jobs[1].domain, nxdomainCheckDomainPrefix))
-	assert.True(t, strings.HasSuffix(jobs[1].domain, ".invalid."))
-	assert.Equal(t, "nxdomain", jobs[1].checkType)
+	assert.Equal(t, dnssecControlDomain, jobs[1].domain)
+	assert.Equal(t, "dnssec-control", jobs[1].checkType)
+	for _, job := range jobs[2:] {
+		assert.True(t, strings.HasPrefix(strings.TrimPrefix(job.domain, "second."), nxdomainCheckDomainPrefix))
+		assert.True(t, strings.HasSuffix(job.domain, ".invalid."))
+		assert.Equal(t, "nxdomain", job.checkType)
+	}
+}
+
+func TestPrepareCheckJobs_RebindingQueriesAAndAAAA(t *testing.T) {
+	server := config.ServerInfo{Address: "1.1.1.1:53", Protocol: config.UDP}
+	benchmarker := NewBenchmarker(&config.Config{CheckRebinding: true, RebindingDomain: rebindingCheckDomain})
+	defer benchmarker.Close()
+
+	jobs := benchmarker.prepareCheckJobs([]config.ServerInfo{server})
+	require.Len(t, jobs, rebindingProbes)
+	var qTypes []uint16
+	for _, job := range jobs {
+		assert.Equal(t, "rebinding", job.checkType)
+		assert.Equal(t, rebindingCheckDomain, job.domain)
+		qTypes = append(qTypes, job.qType)
+	}
+	assert.ElementsMatch(t, []uint16{dns.TypeA, dns.TypeAAAA}, qTypes)
 }
 
 func TestCheckNXDOMAINHijack(t *testing.T) {
@@ -679,72 +699,31 @@ func TestBenchmarker_runChecksConcurrently(t *testing.T) {
 	reqDotcom.SetQuestion("some-dotcom.test.", dns.TypeA)
 	respDotcomNX := createTestResponse(reqDotcom, dns.RcodeNameError)
 
-	// Define mock results - map key is server address, value is list of results IN THE ORDER CHECKS ARE ADDED
-	// Order: DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom
-	mockResults := map[string][]QueryResult{
+	respDNSSECControl := createTestResponse(reqDNSSEC, dns.RcodeSuccess, createARecord(dnssecControlDomain, "192.0.2.53"))
+
+	// Mock results keyed by server and probe kind (see checkProbeKind), so the
+	// order in which concurrent jobs run does not matter.
+	mockResults := map[string]map[string]QueryResult{
 		server1Info.String(): {
-			{Response: respDNSSECOk},                                 // DNSSEC OK
-			{Response: respNXDOMAINOk},                               // NXDOMAIN OK
-			{Response: respRebindingAllowed},                         // Rebinding Allowed
-			{Response: respAccuracyOk},                               // Accuracy OK
-			{Latency: 15 * time.Millisecond, Response: respDotcomNX}, // Dotcom OK (NXDOMAIN expected)
+			"dnssec":         {Response: respDNSSECOk},
+			"dnssec-control": {Response: respDNSSECControl},
+			"nxdomain":       {Response: respNXDOMAINOk},
+			"rebinding/A":    {Response: respRebindingAllowed},
+			"rebinding/AAAA": {Response: respRebindingBlocked},
+			"accuracy":       {Response: respAccuracyOk},
+			"dotcom":         {Latency: 15 * time.Millisecond, Response: respDotcomNX},
 		},
 		server2Info.String(): {
-			{Response: respDNSSECNo},             // DNSSEC No
-			{Response: respNXDOMAINHijacked},     // NXDOMAIN Hijacked
-			{Response: respRebindingBlocked},     // Rebinding Blocked
-			{Response: respAccuracyWrong},        // Accuracy Wrong
-			{Error: errors.New("dotcom failed")}, // Dotcom Error
+			"dnssec":         {Response: respDNSSECNo},
+			"dnssec-control": {Response: respDNSSECControl},
+			"nxdomain":       {Response: respNXDOMAINHijacked},
+			"rebinding/A":    {Response: respRebindingBlocked},
+			"rebinding/AAAA": {Response: respRebindingBlocked},
+			"accuracy":       {Response: respAccuracyWrong},
+			"dotcom":         {Error: errors.New("dotcom failed")},
 		},
 	}
-
-	// --- Mocking ---
-	queryCallCounts := make(map[string]int) // Track calls per server
-	var mu sync.Mutex
-	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-		mu.Lock() // Lock at the beginning
-
-		key := serverInfo.String()
-		count := queryCallCounts[key] // Get current count
-
-		// Determine check type for error message if needed (outside lock is fine)
-		var checkType string
-		switch domain {
-		case dnssecCheckDomain:
-			checkType = "dnssec"
-		case rebindingCheckDomain:
-			checkType = "rebinding"
-		case accuracyDomain:
-			checkType = "accuracy"
-		default:
-			if strings.HasPrefix(domain, nxdomainCheckDomainPrefix) {
-				checkType = "nxdomain"
-			}
-			if strings.HasPrefix(domain, dotcomCheckPrefix) {
-				checkType = "dotcom"
-			}
-		}
-
-		// Find the expected result based on the order checks are added in prepareCheckJobs
-		expectedResults, ok := mockResults[key]
-		if !ok || count >= len(expectedResults) {
-			mu.Unlock() // Unlock before returning error
-			return QueryResult{Error: fmt.Errorf("mock PerformQuery: unexpected call %d for server %s, check %s", count, key, checkType)}
-		}
-
-		// Get the result for the current count
-		if strings.HasPrefix(domain, "second.") {
-			count--
-			queryCallCounts[key]--
-		}
-		resultToReturn := expectedResults[count]
-
-		// Increment count for the next call
-		queryCallCounts[key]++
-		mu.Unlock() // Unlock after accessing shared map
-
-		return resultToReturn
-	}
+	mockFunc := keyedCheckMock(t, mockResults, rebindingCheckDomain, accuracyDomain)
 	restore := mockAllProtocolFuncs(mockFunc)
 	defer restore()
 
@@ -838,48 +817,30 @@ func TestBenchmarker_Run(t *testing.T) {
 	respAccuracyWrong := createTestResponse(reqAccuracy, dns.RcodeSuccess, createARecord(accuracyDomain, "192.0.2.21"))
 	respDotcomNX := createTestResponse(reqDotcom, dns.RcodeNameError)
 
-	// Define mock results sequence per server
-	// Order per server: Cached Latency, Uncached Latency, DNSSEC Check, NXDOMAIN Check, Accuracy Check, Dotcom Check
-	mockResults := map[string][]QueryResult{
+	respDNSSECControl := createTestResponse(reqDNSSEC, dns.RcodeSuccess, createARecord(dnssecControlDomain, "192.0.2.53"))
+
+	// Mock results keyed by server and probe kind (see checkProbeKind).
+	mockResults := map[string]map[string]QueryResult{
 		server1Info.String(): {
-			{Latency: 10 * time.Millisecond, Response: respCachedOK},   // Latency Cached
-			{Latency: 20 * time.Millisecond, Response: respUncachedNX}, // Latency Uncached (NXDOMAIN expected)
-			{Response: respDNSSECOk},                                   // Check DNSSEC
-			{Response: respNXDOMAINOk},                                 // Check NXDOMAIN
-			{Response: respAccuracyOk},                                 // Check Accuracy
-			{Latency: 15 * time.Millisecond, Response: respDotcomNX},   // Check Dotcom (NXDOMAIN expected)
+			"cached":         {Latency: 10 * time.Millisecond, Response: respCachedOK},
+			"uncached":       {Latency: 20 * time.Millisecond, Response: respUncachedNX},
+			"dnssec":         {Response: respDNSSECOk},
+			"dnssec-control": {Response: respDNSSECControl},
+			"nxdomain":       {Response: respNXDOMAINOk},
+			"accuracy":       {Response: respAccuracyOk},
+			"dotcom":         {Latency: 15 * time.Millisecond, Response: respDotcomNX},
 		},
 		server2Info.String(): {
-			{Latency: 15 * time.Millisecond, Response: respCachedOK}, // Latency Cached
-			{Error: errors.New("uncached failed")},                   // Latency Uncached Error
-			{Response: respDNSSECNo},                                 // Check DNSSEC
-			{Response: respNXDOMAINHijacked},                         // Check NXDOMAIN
-			{Response: respAccuracyWrong},                            // Check Accuracy
-			{Error: errors.New("dotcom failed")},                     // Check Dotcom Error
+			"cached":         {Latency: 15 * time.Millisecond, Response: respCachedOK},
+			"uncached":       {Error: errors.New("uncached failed")},
+			"dnssec":         {Response: respDNSSECNo},
+			"dnssec-control": {Response: respDNSSECControl},
+			"nxdomain":       {Response: respNXDOMAINHijacked},
+			"accuracy":       {Response: respAccuracyWrong},
+			"dotcom":         {Error: errors.New("dotcom failed")},
 		},
 	}
-
-	// --- Mocking ---
-	queryCallCounts := make(map[string]int)
-	var mu sync.Mutex
-	mockFunc := func(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-		mu.Lock()
-		key := serverInfo.String()
-		count := queryCallCounts[key]
-		if strings.HasPrefix(domain, "second.") {
-			count--
-			queryCallCounts[key]--
-		}
-		queryCallCounts[key]++
-		mu.Unlock() // Unlock early
-
-		if serverResults, ok := mockResults[key]; ok && count < len(serverResults) {
-			// Simulate network delay slightly for concurrency tests if needed
-			// time.Sleep(1 * time.Millisecond)
-			return serverResults[count]
-		}
-		return QueryResult{Error: fmt.Errorf("mock PerformQueryFunc: unexpected call %d for server %s (domain: %s)", count, key, domain)}
-	}
+	mockFunc := keyedCheckMock(t, mockResults, rebindingCheckDomain, accuracyDomain)
 	restore := mockAllProtocolFuncs(mockFunc)
 	defer restore()
 
@@ -1417,5 +1378,39 @@ func TestCheckHelpersTreatTruncatedAsInconclusive(t *testing.T) {
 			resp.Truncated = true
 			assert.Nil(t, tt.check(QueryResult{Response: resp}))
 		})
+	}
+}
+
+// checkProbeKind names the probe a mocked query belongs to, so mocks can be
+// keyed on what is asked rather than on call order.
+func checkProbeKind(domain string, qType uint16, rebindingDomain, accuracyDomain string) string {
+	switch {
+	case domain == dnssecCheckDomain:
+		return "dnssec"
+	case domain == dnssecControlDomain:
+		return "dnssec-control"
+	case domain == rebindingDomain:
+		return "rebinding/" + dns.TypeToString[qType]
+	case domain == accuracyDomain:
+		return "accuracy"
+	case strings.HasPrefix(domain, dotcomCheckPrefix):
+		return "dotcom"
+	case strings.HasSuffix(domain, nxdomainCheckDomainSuffix):
+		return "nxdomain"
+	case strings.HasSuffix(domain, uncachedQuerySuffix) && strings.Contains(domain, nxdomainCheckDomainPrefix):
+		return "uncached"
+	default:
+		return "cached"
+	}
+}
+
+func keyedCheckMock(t *testing.T, results map[string]map[string]QueryResult, rebindingDomain, accuracyDomain string) func(context.Context, config.ServerInfo, string, uint16, time.Duration) QueryResult {
+	t.Helper()
+	return func(_ context.Context, serverInfo config.ServerInfo, domain string, qType uint16, _ time.Duration) QueryResult {
+		kind := checkProbeKind(domain, qType, rebindingDomain, accuracyDomain)
+		if result, ok := results[serverInfo.String()][kind]; ok {
+			return result
+		}
+		return QueryResult{Error: fmt.Errorf("mock: unexpected %s query %s for %s", kind, domain, serverInfo.String())}
 	}
 }

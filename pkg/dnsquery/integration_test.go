@@ -617,3 +617,130 @@ func TestNXDOMAINProbeAggregation(t *testing.T) {
 		})
 	}
 }
+
+// TestDNSSECEvidence feeds the bogus-domain and signed-control probes through
+// processCheckResult in both orders and checks the combined verdict.
+func TestDNSSECEvidence(t *testing.T) {
+	bogusQuery := new(dns.Msg)
+	bogusQuery.SetQuestion(dnssecCheckDomain, dns.TypeA)
+	controlQuery := new(dns.Msg)
+	controlQuery.SetQuestion(dnssecControlDomain, dns.TypeA)
+
+	servfail := new(dns.Msg)
+	servfail.SetRcode(bogusQuery, dns.RcodeServerFailure)
+	servfailEDE := servfail.Copy()
+	servfailEDE.SetEdns0(1232, true)
+	servfailEDE.IsEdns0().Option = append(servfailEDE.IsEdns0().Option, &dns.EDNS0_EDE{InfoCode: dns.ExtendedErrorCodeDNSBogus})
+	accepted := fixtureReply(bogusQuery)
+	controlOK := fixtureReply(controlQuery)
+	controlEmpty := new(dns.Msg)
+	controlEmpty.SetRcode(controlQuery, dns.RcodeSuccess)
+	controlServfail := new(dns.Msg)
+	controlServfail.SetRcode(controlQuery, dns.RcodeServerFailure)
+	controlTruncated := controlOK.Copy()
+	controlTruncated.Truncated = true
+	// NXDOMAIN with a CNAME answer: records present, but the name did not resolve.
+	controlNXDOMAIN := new(dns.Msg)
+	controlNXDOMAIN.SetRcode(controlQuery, dns.RcodeNameError)
+	controlNXDOMAIN.Answer = []dns.RR{&dns.CNAME{Hdr: dns.RR_Header{Name: dnssecControlDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET}, Target: "gone.example."}}
+
+	type probe struct {
+		checkType string
+		result    QueryResult
+		skipped   bool
+	}
+	bogus := func(m *dns.Msg) probe { return probe{checkType: "dnssec", result: QueryResult{Response: m}} }
+	control := func(m *dns.Msg) probe { return probe{checkType: "dnssec-control", result: QueryResult{Response: m}} }
+	controlTimeout := probe{checkType: "dnssec-control", result: QueryResult{Error: errors.New("query timed out after 1s")}}
+	controlSkipped := probe{checkType: "dnssec-control", skipped: true}
+
+	tests := []struct {
+		name      string
+		probes    []probe
+		wantValue *bool
+		wantState analysis.CheckState
+	}{
+		{"plain SERVFAIL then working control", []probe{bogus(servfail), control(controlOK)}, boolPtr(true), analysis.Pass},
+		{"working control then plain SERVFAIL", []probe{control(controlOK), bogus(servfail)}, boolPtr(true), analysis.Pass},
+		{"plain SERVFAIL without control yet", []probe{bogus(servfail)}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control SERVFAIL", []probe{bogus(servfail), control(controlServfail)}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control NXDOMAIN with CNAME", []probe{bogus(servfail), control(controlNXDOMAIN)}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control empty", []probe{bogus(servfail), control(controlEmpty)}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control truncated", []probe{bogus(servfail), control(controlTruncated)}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control timed out", []probe{bogus(servfail), controlTimeout}, nil, analysis.Inconclusive},
+		{"plain SERVFAIL, control skipped", []probe{bogus(servfail), controlSkipped}, nil, analysis.Inconclusive},
+		{"EDE SERVFAIL needs no control", []probe{bogus(servfailEDE), controlTimeout}, boolPtr(true), analysis.Pass},
+		{"bogus accepted despite working control", []probe{control(controlOK), bogus(accepted)}, boolPtr(false), analysis.Fail},
+		{"control alone proves nothing", []probe{control(controlOK)}, nil, analysis.Inconclusive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			b := NewBenchmarker(&config.Config{CheckDNSSEC: true})
+			defer b.Close()
+			result := &analysis.ServerResult{}
+			b.Results.Results[server.String()] = result
+			for _, p := range tt.probes {
+				b.processCheckResult(queryJobResult{serverInfo: server, checkType: p.checkType, result: p.result, skipped: p.skipped})
+			}
+			assert.Equal(t, tt.wantValue, result.SupportsDNSSEC)
+			assert.Equal(t, tt.wantState, result.Checks["dnssec"])
+		})
+	}
+}
+
+// TestRebindingProbeAggregation checks that A and AAAA probes are combined:
+// an address passed through on either family fails the check, and protection
+// requires both probes to show stripped answers.
+func TestRebindingProbeAggregation(t *testing.T) {
+	queryA := new(dns.Msg)
+	queryA.SetQuestion(rebindingCheckDomain, dns.TypeA)
+	queryAAAA := new(dns.Msg)
+	queryAAAA.SetQuestion(rebindingCheckDomain, dns.TypeAAAA)
+
+	passedA := fixtureReply(queryA)
+	passedA.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: rebindingCheckDomain, Rrtype: dns.TypeA, Class: dns.ClassINET}, A: net.ParseIP("192.168.1.1")}}
+	passedAAAA := fixtureReply(queryAAAA)
+	passedAAAA.Answer = []dns.RR{&dns.AAAA{Hdr: dns.RR_Header{Name: rebindingCheckDomain, Rrtype: dns.TypeAAAA, Class: dns.ClassINET}, AAAA: net.ParseIP("fd00::1")}}
+	strippedA := new(dns.Msg)
+	strippedA.SetRcode(queryA, dns.RcodeSuccess)
+	strippedAAAA := new(dns.Msg)
+	strippedAAAA.SetRcode(queryAAAA, dns.RcodeSuccess)
+
+	type probe struct {
+		result  QueryResult
+		skipped bool
+	}
+	r := func(m *dns.Msg) probe { return probe{result: QueryResult{Response: m}} }
+	failed := probe{result: QueryResult{Error: errors.New("doh http request failed")}}
+	skipped := probe{skipped: true}
+
+	tests := []struct {
+		name      string
+		probes    []probe
+		wantValue *bool
+		wantState analysis.CheckState
+	}{
+		{"only AAAA passes through", []probe{r(strippedA), r(passedAAAA)}, boolPtr(false), analysis.Fail},
+		{"only A passes through", []probe{r(passedA), r(strippedAAAA)}, boolPtr(false), analysis.Fail},
+		{"AAAA passes through, A errored", []probe{failed, r(passedAAAA)}, boolPtr(false), analysis.Fail},
+		{"both stripped", []probe{r(strippedA), r(strippedAAAA)}, boolPtr(true), analysis.Pass},
+		{"A stripped, AAAA skipped", []probe{r(strippedA), skipped}, nil, analysis.Inconclusive},
+		{"A stripped, AAAA errored", []probe{r(strippedA), failed}, nil, analysis.Inconclusive},
+		{"single stripped probe", []probe{r(strippedA)}, nil, analysis.Inconclusive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := config.ServerInfo{Address: "fixture", Protocol: config.UDP}
+			b := NewBenchmarker(&config.Config{CheckRebinding: true, RebindingDomain: rebindingCheckDomain})
+			defer b.Close()
+			result := &analysis.ServerResult{}
+			b.Results.Results[server.String()] = result
+			for _, p := range tt.probes {
+				b.processCheckResult(queryJobResult{serverInfo: server, checkType: "rebinding", result: p.result, skipped: p.skipped})
+			}
+			assert.Equal(t, tt.wantValue, result.BlocksRebinding)
+			assert.Equal(t, tt.wantState, result.Checks["rebinding"])
+		})
+	}
+}

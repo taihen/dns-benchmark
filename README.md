@@ -48,9 +48,9 @@ Visit [taihen.org](https://taihen.org) for introductory [announcement](https://t
   - **.com Latency:** Latency for resolving a random `.com` NXDOMAIN lookup (`-dotcom` flag).
   - **Composite Score:** Weighted blend of uncached (0.50), cached (0.25), and .com (0.25) latency, renormalized when .com is not measured, then divided by effective reliability (probe success rate minus wrong-rcode DNS-failure rate). Lower is better; it ranks catalogue results across providers within each transport and IP-family group, alongside each result's filtering policy. An unrankable server (no usable samples) shows `N/A` in the console table, an empty cell in CSV, and `null` in JSON.
 - **Resolver Checks:**
-  - **DNSSEC Validation:** Checks if the resolver validates DNSSEC signatures (`-dnssec` flag, default: false).
+  - **DNSSEC Validation:** Checks if the resolver rejects a deliberately broken signed domain, using a correctly signed control domain (`-dnssec` flag, default: false).
   - **NXDOMAIN Hijacking:** Detects if the resolver redirects non-existent domains (`-nxdomain` flag, default: false).
-  - **DNS Rebinding Protection:** Checks if the resolver blocks queries for domains resolving to private IPs (`-rebinding` flag, default: false; requires `-rebinding-domain`).
+  - **DNS Rebinding Protection:** Checks if the resolver strips private A and AAAA answers (`-rebinding` flag, default: false; requires `-rebinding-domain`).
   - **Response Accuracy:** Verifies if the resolver returns the expected IP for a known domain (requires `-accuracy-file` flag).
 - **Configuration:**
   - Use a built-in list of common public resolvers from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and DNS4EU.
@@ -121,13 +121,17 @@ the configured global rate limiter. Truncated replies count as failed
 probes in their own counter, are not used as latency samples or check evidence, and
 no uncounted TCP fallback is sent.
 
-DNSSEC only reports validation failure evidence when a bogus-domain SERVFAIL has
-a DNSSEC-related Extended DNS Error. Generic SERVFAIL is inconclusive. NXDOMAIN
-checks use two reserved-domain names and recognize CNAME redirects. Rebinding
-requires `-rebinding-domain` pointing to a controlled domain expected to return
-private addresses; `-rebinding` without it is rejected. Only NOERROR without address
-records counts as protection; NXDOMAIN and REFUSED are inconclusive, since a
-mistyped domain or a refusing resolver produces them too. Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6;
+DNSSEC queries the bogus domain `dnssec-failed.org` and a correctly signed
+control domain, `ietf.org`. NOERROR for the bogus domain means no validation.
+SERVFAIL counts as validation when it carries a DNSSEC-related Extended DNS Error,
+or when the same resolver answers the control domain with NOERROR and records;
+otherwise it is inconclusive, since a resolver that fails every query also returns
+SERVFAIL. NXDOMAIN checks use two reserved-domain names and recognize CNAME
+redirects. Rebinding requires `-rebinding-domain` pointing to a controlled domain
+with private A and/or AAAA records; `-rebinding` without it is rejected. Both A and
+AAAA are queried: a returned address on either fails the check, and only NOERROR
+without address records on both counts as protection. NXDOMAIN and REFUSED are
+inconclusive, since a mistyped domain or a refusing resolver produces them too. Accuracy files accept `domain IP[,IP...]` (first valid line), including IPv6;
 the first expected address chooses A or AAAA. `-filtering` currently uses
 Cloudflare's documented malware/adult test domains for its matching profiles;
 profiles without documented probes report `not_applicable`. Policy probes never
@@ -228,7 +232,7 @@ This will create an executable named `dns-benchmark` in the current directory.
 
 - DoH requests include a `User-Agent` header: `dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)`
 - Accuracy check requires a file where each line contains a domain and its expected IPs (comma-separated), separated by whitespace. The tool uses the first valid entry found.
-- Rebinding checks require `-rebinding-domain` with a controlled domain expected to resolve to private addresses.
+- Rebinding checks require `-rebinding-domain` with a controlled domain that has private A and/or AAAA records.
 - Results reflect network conditions at the time of the test. Run multiple times for a broader picture.
 - Please use responsibly and avoid excessive querying.
 

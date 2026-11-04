@@ -35,7 +35,13 @@ var (
 )
 
 const (
-	dnssecCheckDomain         = "dnssec-failed.org."
+	dnssecCheckDomain = "dnssec-failed.org."
+	// dnssecControlDomain is a long-standing correctly signed zone. Validating
+	// resolvers answer it normally, so it separates DNSSEC validation failures
+	// from resolvers that return SERVFAIL for everything.
+	dnssecControlDomain = "ietf.org."
+	// rebindingProbes is the number of rebinding queries per server (A and AAAA).
+	rebindingProbes           = 2
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
 	nxdomainCheckDomainSuffix = ".invalid."
 
@@ -538,6 +544,25 @@ type Benchmarker struct {
 	dohClients     map[string]*http.Client // HTTP clients for DoH servers
 	quicPool       *quicConnectionPool
 	progress       *progressTracker
+	evidence       map[string]*checkEvidence // multi-probe check state per server
+}
+
+// checkEvidence accumulates probe results for checks that need more than one
+// query. Check results are processed on a single goroutine, in any order.
+type checkEvidence struct {
+	dnssecBogus   *QueryResult
+	dnssecControl *QueryResult
+	rebinding     []analysis.CheckState
+}
+
+func (b *Benchmarker) evidenceFor(serverKey string) *checkEvidence {
+	if b.evidence == nil {
+		b.evidence = map[string]*checkEvidence{}
+	}
+	if b.evidence[serverKey] == nil {
+		b.evidence[serverKey] = &checkEvidence{}
+	}
+	return b.evidence[serverKey]
 }
 
 // NewBenchmarker creates a new Benchmarker instance.
@@ -796,7 +821,9 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 	nxDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, nxdomainCheckDomainSuffix)
 	for _, server := range servers {
 		if b.Config.CheckDNSSEC {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"})
+			checkJobsList = append(checkJobsList,
+				queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"},
+				queryJob{serverInfo: server, domain: dnssecControlDomain, qType: dns.TypeA, checkType: "dnssec-control"})
 		}
 		if b.Config.CheckNXDOMAIN {
 			for _, name := range []string{nxDomain, "second." + nxDomain} {
@@ -804,7 +831,9 @@ func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 			}
 		}
 		if b.Config.CheckRebinding && b.Config.RebindingDomain != "" {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.RebindingDomain, qType: dns.TypeA, checkType: "rebinding"})
+			for _, qType := range []uint16{dns.TypeA, dns.TypeAAAA} {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.RebindingDomain, qType: qType, checkType: "rebinding"})
+			}
 		}
 		if b.Config.CheckFiltering {
 			for _, domain := range server.FilteringProbeDomains {
@@ -888,8 +917,15 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 	}
 	// Update results based on check type
 	switch res.checkType {
-	case "dnssec":
-		serverResult.SupportsDNSSEC = checkDNSSECValidation(res.result)
+	case "dnssec", "dnssec-control":
+		evidence := b.evidenceFor(serverKey)
+		result := res.result
+		if res.checkType == "dnssec" {
+			evidence.dnssecBogus = &result
+		} else {
+			evidence.dnssecControl = &result
+		}
+		serverResult.SupportsDNSSEC = combineDNSSECEvidence(evidence.dnssecBogus, evidence.dnssecControl)
 		serverResult.Checks["dnssec"] = analysis.StateFromBool(serverResult.SupportsDNSSEC, false)
 	case "nxdomain":
 		value := checkNXDOMAINHijack(res.result)
@@ -906,8 +942,11 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		}
 		serverResult.Checks["nxdomain"] = analysis.StateFromBool(serverResult.HijacksNXDOMAIN, true)
 	case "rebinding":
-		serverResult.BlocksRebinding = checkRebindingProtection(res.result)
-		serverResult.Checks["rebinding"] = analysis.StateFromBool(serverResult.BlocksRebinding, false)
+		evidence := b.evidenceFor(serverKey)
+		evidence.rebinding = append(evidence.rebinding, analysis.StateFromBool(checkRebindingProtection(res.result), false))
+		state := combineProbeStates(evidence.rebinding, rebindingProbes)
+		serverResult.BlocksRebinding = boolFromState(state)
+		serverResult.Checks["rebinding"] = state
 	case "filtering":
 		state := analysis.Inconclusive
 		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeSuccess && len(res.result.Response.Answer) > 0 {
@@ -1091,9 +1130,11 @@ func conclusiveResponse(result QueryResult) bool {
 	return result.Error == nil && result.Response != nil && !result.Response.Truncated
 }
 
-// checkDNSSECValidation checks whether the resolver performs DNSSEC validation.
-// The check query uses a deliberately broken DNSSEC domain, so validating resolvers
-// should return SERVFAIL while non-validating resolvers typically return NOERROR.
+// checkDNSSECValidation classifies the answer for the deliberately broken
+// DNSSEC domain on its own. NOERROR means the bogus data was accepted (false).
+// SERVFAIL with a DNSSEC-related Extended DNS Error (codes 6-12) proves a
+// validation failure (true). Plain SERVFAIL is ambiguous by itself and returns
+// nil; combineDNSSECEvidence resolves it with the signed control query.
 func checkDNSSECValidation(result QueryResult) *bool {
 	if !conclusiveResponse(result) {
 		return nil
@@ -1115,6 +1156,27 @@ func checkDNSSECValidation(result QueryResult) *bool {
 	}
 }
 
+// combineDNSSECEvidence merges the bogus-domain and signed-control probes. A
+// plain SERVFAIL for the bogus domain counts as validation only when the same
+// resolver answers the correctly signed control domain with NOERROR and at
+// least one record, ruling out a resolver that fails every query. Either probe
+// may be missing while results are still arriving.
+func combineDNSSECEvidence(bogus, control *QueryResult) *bool {
+	if bogus == nil {
+		return nil
+	}
+	if verdict := checkDNSSECValidation(*bogus); verdict != nil {
+		return verdict
+	}
+	if !conclusiveResponse(*bogus) || bogus.Response.Rcode != dns.RcodeServerFailure {
+		return nil
+	}
+	if control == nil || !conclusiveResponse(*control) || control.Response.Rcode != dns.RcodeSuccess || len(control.Response.Answer) == 0 {
+		return nil
+	}
+	return boolPtr(true)
+}
+
 // checkNXDOMAINHijack checks for NXDOMAIN hijacking.
 // It determines if a server returns a NOERROR response with records for a deliberately non-existent domain,
 // which is indicative of hijacking.
@@ -1132,8 +1194,10 @@ func checkNXDOMAINHijack(result QueryResult) *bool {
 	return nil // Inconclusive (SERVFAIL, REFUSED, or NOERROR with empty answers)
 }
 
-// checkRebindingProtection checks for DNS rebinding protection.
-// It queries a controlled domain that resolves to a private address. Protection
+// checkRebindingProtection classifies one rebinding probe. The controlled
+// domain is queried for both A and AAAA, and the probes are combined with
+// combineProbeStates: any passed-through address fails the check, and
+// protection requires both probes to show stripped answers. Protection
 // is reported only when the resolver answers NOERROR without address records,
 // which is how rebinding filters strip private answers. Address records mean
 // the private answer was passed through. NXDOMAIN and REFUSED are inconclusive:

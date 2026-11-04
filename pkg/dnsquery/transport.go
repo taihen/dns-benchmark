@@ -57,6 +57,18 @@ func initialCheckStates(cfg *config.Config, servers ...config.ServerInfo) map[st
 	return checks
 }
 
+// boolFromState maps a check state to the legacy *bool compatibility value.
+func boolFromState(state analysis.CheckState) *bool {
+	switch state {
+	case analysis.Pass:
+		return boolPtr(true)
+	case analysis.Fail:
+		return boolPtr(false)
+	default:
+		return nil
+	}
+}
+
 // combineProbeStates merges per-domain probe states. Any observed Fail is
 // conclusive even when other probes are missing or inconclusive; Pass requires
 // all expected probes to pass.

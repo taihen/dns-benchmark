@@ -178,7 +178,7 @@ func LoadConfig() *Config {
 	flag.StringVar(&cfg.Profiles, "profile", "", "Comma-separated catalogue profile IDs (overrides preset)")
 	flag.StringVar(&cfg.Transports, "transports", "", "Comma-separated transports: udp,tcp,dot,doh,doq")
 	flag.StringVar(&cfg.IPFamily, "ip-family", "auto", "IP family: ipv4, ipv6, auto (both for explicit catalogue selections)")
-	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain resolving to private addresses; required for a conclusive rebinding probe")
+	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain with private A and/or AAAA records; required for a conclusive rebinding probe")
 	flag.Parse()
 
 	// -version must work without selecting servers or loading the catalogue.
@@ -229,7 +229,7 @@ func LoadConfig() *Config {
 // validateChecks rejects check flags that cannot produce a conclusive result.
 func (cfg *Config) validateChecks() error {
 	if cfg.CheckRebinding && strings.TrimSpace(cfg.RebindingDomain) == "" {
-		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name that resolves to a private address>")
+		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name with private A and/or AAAA records>")
 	}
 	return nil
 }
