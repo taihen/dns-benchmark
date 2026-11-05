@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -9,9 +10,15 @@ import (
 	"os"
 	"regexp"
 	"runtime"
-	"strconv" // Added strconv import
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/miekg/dns"
+
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
 // ProtocolType defines the DNS protocol.
@@ -27,43 +34,66 @@ const (
 
 // ServerInfo holds details about a DNS server endpoint.
 type ServerInfo struct {
-	Address  string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
-	Protocol ProtocolType
-	Hostname string // Hostname for TLS SNI / DoH URL host. Should NOT contain brackets for IPv6.
+	catalog.Metadata
+	// ConnectAddress optionally pins the DoH connection independently of its URL.
+	ConnectAddress string
+	// TLSRootCAs optionally supplies a private trust store for controlled endpoints.
+	TLSRootCAs *x509.CertPool
+	Address    string // For UDP/TCP/DoT/DoQ: IP:Port or Host:Port. For DoH: Full URL.
+	Protocol   ProtocolType
+	// Hostname is the host part of Address (an IP literal or a name), or the
+	// DoH URL host, without IPv6 brackets. It is used for TLS SNI only when
+	// Metadata.TLSServerName is empty, as for custom -f entries.
+	Hostname string
 	DoHPath  string // Path for DoH endpoint (e.g., /dns-query).
 }
 
-// String representation for ServerInfo, used for display and deduplication keys.
+// String returns the unique identity of an endpoint, used as the results key and
+// for verbose output. Catalogue endpoints are prefixed with their endpoint ID so
+// that two endpoints sharing an address remain distinct; others use AddressString().
 func (si ServerInfo) String() string {
+	if si.EndpointID != "" {
+		return si.EndpointID + " (" + string(si.Protocol) + ":" + si.Address + ")"
+	}
+	return si.AddressString()
+}
+
+// AddressString returns the protocol-prefixed address in the form accepted by
+// -f (for example "1.1.1.1:53", "tls://one.one.one.one:853" or a DoH URL).
+// DoT and DoQ use the catalogue TLS name when there is one, so IP-literal
+// forms such as "tls://9.9.9.9:853" only appear for custom entries. It is
+// reported as serverAddress in CSV, JSON and console output.
+func (si ServerInfo) AddressString() string {
 	switch si.Protocol {
 	case DOH:
 		return si.Address // DoH address is the full URL
 	case DOT:
-		// Use Hostname for DoT if it's not an IP, otherwise use Address (which includes port)
-		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
-			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil {
-				port = "853"
-			} // Default DoT port
-			return fmt.Sprintf("tls://%s", net.JoinHostPort(si.Hostname, port))
-		}
-		return fmt.Sprintf("tls://%s", si.Address) // Fallback to using Address
+		return tlsAddressString("tls", si)
 	case DOQ:
-		// Use Hostname for DoQ if it's not an IP, otherwise use Address
-		if si.Hostname != "" && net.ParseIP(si.Hostname) == nil {
-			_, port, err := net.SplitHostPort(si.Address)
-			if err != nil {
-				port = "853"
-			} // Default DoQ port
-			return fmt.Sprintf("quic://%s", net.JoinHostPort(si.Hostname, port))
-		}
-		return fmt.Sprintf("quic://%s", si.Address)
+		return tlsAddressString("quic", si)
 	case TCP:
 		// Preserve tcp:// prefix for TCP endpoints
 		return fmt.Sprintf("tcp://%s", si.Address)
 	default: // UDP
 		return si.Address
 	}
+}
+
+// tlsAddressString formats a DoT/DoQ endpoint by its authenticated name when it
+// has one (catalogue TLSServerName, else a non-IP Hostname), otherwise by Address.
+func tlsAddressString(scheme string, si ServerInfo) string {
+	name := si.TLSServerName
+	if name == "" {
+		name = si.Hostname
+	}
+	if name != "" && net.ParseIP(name) == nil {
+		_, port, err := net.SplitHostPort(si.Address)
+		if err != nil {
+			port = "853" // Default DoT/DoQ port
+		}
+		return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(name, port))
+	}
+	return fmt.Sprintf("%s://%s", scheme, si.Address)
 }
 
 // Label returns the friendly display name for the protocol (e.g. "DoT").
@@ -88,6 +118,19 @@ var resolvConfNameserverRegex = regexp.MustCompile(`^\s*nameserver\s+([^\s]+)\s*
 
 // Config holds the application configuration derived from flags and files.
 type Config struct {
+	// Preset selects catalogue profiles: legacy, general, security, family
+	// or extended.
+	Preset string
+	// Profiles is a comma-separated list of catalogue profile IDs; it
+	// overrides Preset.
+	Profiles string
+	// Transports is a comma-separated transport filter (udp,tcp,dot,doh,doq).
+	Transports string
+	// IPFamily is ipv4, ipv6 or auto.
+	IPFamily string
+	// RebindingDomain is a controlled name with private A/AAAA records,
+	// required by CheckRebinding.
+	RebindingDomain     string
 	ServersFile         string
 	Servers             []ServerInfo
 	NumQueries          int
@@ -97,6 +140,7 @@ type Config struct {
 	QueryType           string
 	Domain              string // Domain for cached latency tests
 	CheckDNSSEC         bool
+	CheckFiltering      bool // Run documented provider filtering probes.
 	CheckNXDOMAIN       bool
 	Verbose             bool
 	OutputFile          string
@@ -110,33 +154,19 @@ type Config struct {
 	ShowVersion         bool
 }
 
-// DefaultDNSStrings provides a list of common public DNS endpoints.
-var DefaultDNSStrings = []string{
-	// Cloudflare
-	"1.1.1.1",
-	"tls://1.1.1.1",
-	"https://cloudflare-dns.com/dns-query",
-	// Google
-	"8.8.8.8",
-	"tls://8.8.8.8",
-	"https://dns.google/dns-query",
-	// Quad9
-	"9.9.9.9",
-	"tls://9.9.9.9",
-	"https://dns.quad9.net/dns-query",
-	// OpenDNS
-	"208.67.222.222",
-	"tls://dns.opendns.com",
-	"https://doh.opendns.com/dns-query",
-	// AdGuard DNS
-	"94.140.14.14",
-	"tls://dns.adguard-dns.com",
-	"https://dns.adguard-dns.com/dns-query",
-	// DNS4EU (Unfiltered)
-	"86.54.11.100",
-	"tls://unfiltered.joindns4.eu",
-	"https://unfiltered.joindns4.eu/dns-query",
+// DefaultDNSStrings returns the legacy preset's IPv4 UDP, DoT and DoH endpoints
+// in the historical string format. DoT entries now use the provider's TLS
+// name (for example tls://one.one.one.one) rather than an IP literal. The
+// catalogue is loaded on first call, not at package init, so -version and
+// other paths that never need it cannot fail on it.
+//
+// Deprecated: use Config.LoadServers to retain catalogue metadata and TLS names.
+func DefaultDNSStrings() ([]string, error) {
+	entries, err := defaultDNSStrings()
+	return slices.Clone(entries), err
 }
+
+var defaultDNSStrings = sync.OnceValues(legacyEndpointStrings)
 
 // LoadConfig parses flags, reads files, and returns the final configuration.
 func LoadConfig() *Config {
@@ -154,67 +184,56 @@ func LoadConfig() *Config {
 	flag.IntVar(&cfg.RateLimit, "rate", 50, "Max queries per second (0 for unlimited)")
 	flag.StringVar(&cfg.QueryType, "type", "A", "DNS record type for latency queries")
 	flag.StringVar(&cfg.Domain, "domain", "example.com", "Domain for repeated-domain latency test (often cached, not guaranteed)")
+	flag.BoolVar(&cfg.CheckFiltering, "filtering", false, "Run documented provider filtering probes outside latency scoring")
 	flag.BoolVar(&cfg.CheckDNSSEC, "dnssec", false, "Check for DNSSEC support")
 	flag.BoolVar(&cfg.CheckNXDOMAIN, "nxdomain", false, "Check for NXDOMAIN hijacking")
-	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection")
+	flag.BoolVar(&cfg.CheckRebinding, "rebinding", false, "Check for DNS rebinding protection (requires -rebinding-domain)")
 	flag.BoolVar(&cfg.CheckDotcom, "dotcom", false, "Measure latency for a random .com NXDOMAIN lookup")
 	flag.StringVar(
 		&cfg.AccuracyCheckFile,
 		"accuracy-file",
 		"",
-		"Path to file for accuracy check (domain IP per line, uses first valid entry)",
+		"Path to file for accuracy check (domain IP[,IP...] per line, uses first valid entry)",
 	)
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose output")
-	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (CSV/JSON)")
+	flag.StringVar(&cfg.OutputFile, "o", "", "Path to output file (console, CSV or JSON output)")
 	flag.StringVar(&cfg.OutputFormat, "format", "console", "Output format (console, csv, json)")
 	flag.BoolVar(&cfg.IncludeSystemDNS, "system", true, "Include system DNS servers (UDP only)")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 
+	flag.StringVar(&cfg.Preset, "preset", "legacy", "Resolver preset: legacy, general, security, family, extended")
+	flag.StringVar(&cfg.Profiles, "profile", "", "Comma-separated catalogue profile IDs (overrides preset)")
+	flag.StringVar(&cfg.Transports, "transports", "", "Comma-separated transports: udp,tcp,dot,doh,doq")
+	flag.StringVar(&cfg.IPFamily, "ip-family", "auto", "IP family: ipv4, ipv6, auto (both for explicit catalogue selections)")
+	flag.StringVar(&cfg.RebindingDomain, "rebinding-domain", "", "Controlled domain with private A and/or AAAA records; required with -rebinding")
 	flag.Parse()
+
+	// -version must work without selecting servers or loading the catalogue.
+	if cfg.ShowVersion {
+		return cfg
+	}
+
+	if err := cfg.validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Load accuracy check data first
 	if cfg.AccuracyCheckFile != "" {
 		domain, ip, err := loadAccuracyCheckFile(cfg.AccuracyCheckFile)
 		if err != nil {
-			fmt.Fprintf(
-				os.Stderr,
-				"Warning: Could not load accuracy check file %s: %v. Disabling check.\n",
-				cfg.AccuracyCheckFile,
-				err,
-			)
-			cfg.AccuracyCheckFile = ""
+			fmt.Fprintf(os.Stderr, "Error: could not load accuracy check file %s: %v\n", cfg.AccuracyCheckFile, err)
+			os.Exit(1)
 		} else {
 			cfg.AccuracyCheckDomain = domain
 			cfg.AccuracyCheckIP = ip
 		}
 	}
 
-	// Determine initial server list
-	var serverListInput []string
-	if cfg.ServersFile != "" {
-		servers, err := readServerStringsFromFile(cfg.ServersFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading servers file %s: %v\n", cfg.ServersFile, err)
-			os.Exit(1)
-		}
-		serverListInput = servers
-		cfg.IncludeSystemDNS = false // Disable system DNS if file is provided
-	} else {
-		serverListInput = DefaultDNSStrings
+	if err := cfg.LoadServers(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error selecting servers: %v\n", err)
+		os.Exit(1)
 	}
-
-	// Add system DNS if requested
-	if cfg.IncludeSystemDNS && cfg.ServersFile == "" {
-		systemServers, err := getSystemDNSServers()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not detect system DNS servers: %v\n", err)
-		} else {
-			serverListInput = append(serverListInput, systemServers...)
-		}
-	}
-
-	// Parse and deduplicate the final list
-	cfg.Servers = parseAndDeduplicateServers(serverListInput)
 
 	if len(cfg.Servers) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: No valid DNS servers specified or found.\n")
@@ -229,37 +248,59 @@ func LoadConfig() *Config {
 	return cfg
 }
 
+// validate rejects flag values that would otherwise only fail, or silently
+// change meaning, after the benchmark has run: an unknown output format, an
+// unknown query type, a non-positive timeout, or a check that cannot produce
+// a conclusive result.
+func (cfg *Config) validate() error {
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("-t must be a positive duration such as 5s, got %s", cfg.Timeout)
+	}
+	switch strings.ToLower(cfg.OutputFormat) {
+	case "console", "csv", "json":
+	default:
+		return fmt.Errorf("unknown output format %q; use console, csv or json", cfg.OutputFormat)
+	}
+	if _, ok := dns.StringToType[strings.ToUpper(cfg.QueryType)]; !ok {
+		return fmt.Errorf("unknown -type %q; use a DNS record type such as A, AAAA, MX or TXT", cfg.QueryType)
+	}
+	if cfg.CheckRebinding && strings.TrimSpace(cfg.RebindingDomain) == "" {
+		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name with private A and/or AAAA records>")
+	}
+	return nil
+}
+
 // printVerboseConfig prints the configuration details.
 func printVerboseConfig(cfg *Config) {
-	fmt.Println("--- Configuration ---")
-	fmt.Printf("Servers File:      %s\n", cfg.ServersFile)
-	fmt.Printf("Servers Processed: %v\n", cfg.Servers)
-	fmt.Printf("Num Queries:       %d\n", cfg.NumQueries)
-	fmt.Printf("Timeout:           %v\n", cfg.Timeout)
-	fmt.Printf("Concurrency:       %d\n", cfg.Concurrency)
-	fmt.Printf("Rate Limit:        %d qps\n", cfg.RateLimit)
-	fmt.Printf("Query Type:        %s\n", cfg.QueryType)
-	fmt.Printf("Cached Domain:     %s\n", cfg.Domain)
-	fmt.Printf("Check DNSSEC:      %t\n", cfg.CheckDNSSEC)
-	fmt.Printf("Check NXDOMAIN:    %t\n", cfg.CheckNXDOMAIN)
-	fmt.Printf("Check Rebinding:   %t\n", cfg.CheckRebinding)
-	fmt.Printf("Check Dotcom:      %t\n", cfg.CheckDotcom)
+	fmt.Fprintln(os.Stderr, "--- Configuration ---")
+	fmt.Fprintf(os.Stderr, "Servers File:      %s\n", cfg.ServersFile)
+	fmt.Fprintf(os.Stderr, "Servers Processed: %v\n", cfg.Servers)
+	fmt.Fprintf(os.Stderr, "Num Queries:       %d\n", cfg.NumQueries)
+	fmt.Fprintf(os.Stderr, "Timeout:           %v\n", cfg.Timeout)
+	fmt.Fprintf(os.Stderr, "Concurrency:       %d\n", cfg.Concurrency)
+	fmt.Fprintf(os.Stderr, "Rate Limit:        %d qps\n", cfg.RateLimit)
+	fmt.Fprintf(os.Stderr, "Query Type:        %s\n", cfg.QueryType)
+	fmt.Fprintf(os.Stderr, "Cached Domain:     %s\n", cfg.Domain)
+	fmt.Fprintf(os.Stderr, "Check DNSSEC:      %t\n", cfg.CheckDNSSEC)
+	fmt.Fprintf(os.Stderr, "Check NXDOMAIN:    %t\n", cfg.CheckNXDOMAIN)
+	fmt.Fprintf(os.Stderr, "Check Rebinding:   %t\n", cfg.CheckRebinding)
+	fmt.Fprintf(os.Stderr, "Check Dotcom:      %t\n", cfg.CheckDotcom)
 	if cfg.AccuracyCheckFile != "" {
-		fmt.Printf(
+		fmt.Fprintf(os.Stderr,
 			"Accuracy Check:    Enabled (File: %s, Using: %s -> %s)\n",
 			cfg.AccuracyCheckFile,
 			cfg.AccuracyCheckDomain,
 			cfg.AccuracyCheckIP,
 		)
 	} else {
-		fmt.Println("Accuracy Check:    Disabled")
+		fmt.Fprintln(os.Stderr, "Accuracy Check:    Disabled")
 	}
-	fmt.Printf("Include System DNS:%t\n", cfg.IncludeSystemDNS)
-	fmt.Printf("Output Format:     %s\n", cfg.OutputFormat)
+	fmt.Fprintf(os.Stderr, "Include System DNS:%t\n", cfg.IncludeSystemDNS)
+	fmt.Fprintf(os.Stderr, "Output Format:     %s\n", cfg.OutputFormat)
 	if cfg.OutputFile != "" {
-		fmt.Printf("Output File:       %s\n", cfg.OutputFile)
+		fmt.Fprintf(os.Stderr, "Output File:       %s\n", cfg.OutputFile)
 	}
-	fmt.Println("---------------------")
+	fmt.Fprintln(os.Stderr, "---------------------")
 }
 
 // readServerStringsFromFile reads server endpoints from a file.
@@ -337,6 +378,25 @@ func isValidHostname(hostname string) bool {
 	return true
 }
 
+// isBracketableIPv6 reports whether host may appear inside [] in an endpoint:
+// only IPv6 literals qualify, not IPv4 (including IPv4-mapped forms) or names.
+func isBracketableIPv6(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // parseServerString parses a server endpoint string into a ServerInfo struct.
 // It handles various formats including IP:port, Host:port, and URLs for DoH.
 // It detects the protocol (UDP, TCP, DoT, DoH, DoQ) from the string prefix or scheme.
@@ -347,141 +407,80 @@ func parseServerString(serverStr string) (ServerInfo, error) {
 		return ServerInfo{}, fmt.Errorf("server string cannot be empty or only whitespace")
 	}
 
-	// Handle DoH separately as it's a full URL
-	if strings.HasPrefix(serverStr, "https://") {
-		u, err := url.Parse(serverStr)
-		if err != nil {
-			return ServerInfo{}, fmt.Errorf("invalid DoH URL '%s': %w", serverStr, err)
-		}
-		if u.Scheme != "https" {
-			return ServerInfo{}, fmt.Errorf(
-				"invalid DoH URL scheme in '%s': must be https",
-				serverStr,
-			)
-		}
-		host := u.Hostname()
-		if host == "" {
-			return ServerInfo{}, fmt.Errorf(
-				"invalid DoH URL (missing or invalid host): '%s'",
-				serverStr,
-			)
-		}
-		if !isValidHostname(host) {
-			return ServerInfo{}, fmt.Errorf(
-				"invalid hostname '%s' in DoH URL '%s'",
-				host,
-				serverStr,
-			)
-		}
-		return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: host, DoHPath: u.Path}, nil
-	}
-
-	// Handle other protocols (UDP, TCP, DoT, DoQ)
-	var protocol ProtocolType
-	var defaultPort string
-	addrPart := serverStr // The part potentially containing host/IP and port
-
-	// Detect protocol and strip prefix
-	if strings.HasPrefix(addrPart, "tls://") {
-		protocol = DOT
-		defaultPort = "853"
-		addrPart = strings.TrimPrefix(addrPart, "tls://")
-	} else if strings.HasPrefix(addrPart, "quic://") {
-		protocol = DOQ
-		defaultPort = "853"
-		addrPart = strings.TrimPrefix(addrPart, "quic://")
-	} else if strings.HasPrefix(addrPart, "tcp://") {
-		protocol = TCP
-		defaultPort = "53"
-		addrPart = strings.TrimPrefix(addrPart, "tcp://")
-	} else {
-		protocol = UDP // Default
-		defaultPort = "53"
-		// Check for accidental schemes like http://, but ignore if it looks like IPv6
-		if i := strings.Index(addrPart, "://"); i != -1 && !strings.Contains(addrPart[:i], ":") {
-			if addrPart[:i] != "udp" { // Allow explicit udp://
-				fmt.Fprintf(os.Stderr, "Warning: Unrecognized protocol scheme '%s' in '%s', assuming UDP.\n", addrPart[:i], serverStr)
+	protocol := UDP
+	addrPart := serverStr
+	if scheme, rest, ok := strings.Cut(serverStr, "://"); ok {
+		addrPart = rest
+		switch scheme {
+		case "https":
+			u, err := url.Parse(serverStr)
+			if err != nil || u.Hostname() == "" || !isValidHostname(u.Hostname()) || u.User != nil || u.Fragment != "" {
+				return ServerInfo{}, fmt.Errorf("invalid DoH URL %q", serverStr)
 			}
-			addrPart = addrPart[i+3:]
-		}
-	}
-
-	// Now addrPart should be host, ip, [ipv6], host:port, ip:port, or [ipv6]:port
-	var host string
-	_, port, err := net.SplitHostPort(addrPart)
-	hostname := ""
-	if err == nil {
-		// Remove brackets from IPv6 literal, set both host and hostname to unbracketed form
-		hostname = strings.Trim(addrPart[:len(addrPart)-len(":"+port)], "[]")
-		host = hostname
-
-		// Validate port is numeric; fallback to defaultPort if not
-		if _, perr := strconv.Atoi(port); perr != nil {
-			fmt.Fprintf(
-				os.Stderr,
-				"Warning: Invalid port in '%s', using default port %s for host '%s'.\n",
-				serverStr,
-				defaultPort,
-				hostname,
-			)
-			port = defaultPort
-		}
-	} else {
-		// No port or malformed: assume defaultPort, salvage host if possible
-		host = addrPart
-		port = defaultPort
-		hostname = host
-		// Remove brackets for IPv6 literal without port
-		if strings.HasPrefix(hostname, "[") && strings.HasSuffix(hostname, "]") {
-			hostname = strings.Trim(hostname, "[]")
-			host = hostname
-		}
-		// Salvage logic for entries like "host:bad"
-		if strings.Contains(addrPart, ":") {
-			if ip := net.ParseIP(hostname); ip == nil {
-				parts := strings.SplitN(addrPart, ":", 2)
-				if len(parts) == 2 && isValidHostname(parts[0]) {
-					host = parts[0]
-					hostname = parts[0]
-					fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, host)
+			if u.Port() != "" {
+				if err := validatePort(u.Port()); err != nil {
+					return ServerInfo{}, err
 				}
 			}
+			return ServerInfo{Address: serverStr, Protocol: DOH, Hostname: u.Hostname(), DoHPath: u.Path}, nil
+		case "udp":
+			protocol = UDP
+		case "tcp":
+			protocol = TCP
+		case "tls":
+			protocol = DOT
+		case "quic":
+			protocol = DOQ
+		case "http":
+			// Plaintext DoH is not supported; treating it as UDP would benchmark
+			// something other than what the user asked for.
+			return ServerInfo{}, fmt.Errorf("unsupported URI scheme %q (DoH requires https)", scheme)
+		default:
+			// Historical behaviour, kept for existing server files: warn and
+			// fall back to UDP rather than dropping the entry.
+			fmt.Fprintf(os.Stderr, "Warning: Unrecognized protocol scheme '%s' in '%s', assuming UDP.\n", scheme, serverStr)
 		}
 	}
-
-	// Ensure non-IP hostnames contain a dot
-	if net.ParseIP(hostname) == nil && !strings.Contains(hostname, ".") {
-		return ServerInfo{}, fmt.Errorf(
-			"invalid hostname '%s' in '%s': must contain a dot for non-IP",
-			hostname,
-			serverStr,
-		)
+	defaultPort := "53"
+	if protocol == DOT || protocol == DOQ {
+		defaultPort = "853"
 	}
-
-	// Final validation of the derived hostname
-	if !isValidHostname(hostname) {
-		// Special case: if the original input was just an IPv6 without brackets, it's valid
-		// Check addrPart directly here, as hostname might have been trimmed
-		if ip := net.ParseIP(addrPart); ip != nil && ip.To4() == nil {
-			hostname = addrPart // Use the original IPv6 string as hostname
-			host = addrPart     // Use the original IPv6 string for JoinHostPort
-		} else {
-			return ServerInfo{}, fmt.Errorf("invalid host/IP address derived from '%s': %s", serverStr, hostname)
+	port := defaultPort
+	host := addrPart
+	if h, p, err := net.SplitHostPort(addrPart); err == nil {
+		host, port = h, p
+		// SplitHostPort strips brackets around any host, so "[1.2.3.4]:53"
+		// would otherwise pass as 1.2.3.4. Brackets are only valid for IPv6.
+		if strings.HasPrefix(addrPart, "[") && !isBracketableIPv6(h) {
+			return ServerInfo{}, fmt.Errorf("invalid bracketed IPv6 %q", addrPart)
 		}
+		if !isNumeric(p) {
+			// Historical behaviour: a non-numeric port falls back to the
+			// protocol default with a warning. Numeric out-of-range ports
+			// still fail below, as they could never have connected.
+			fmt.Fprintf(os.Stderr, "Warning: Invalid port in '%s', using default port %s for host '%s'.\n", serverStr, defaultPort, h)
+			port = defaultPort
+		}
+	} else if strings.HasPrefix(addrPart, "[") && strings.HasSuffix(addrPart, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(addrPart, "["), "]")
+		if !isBracketableIPv6(host) {
+			return ServerInfo{}, fmt.Errorf("invalid bracketed IPv6 %q", addrPart)
+		}
+	} else if strings.Contains(addrPart, ":") && net.ParseIP(addrPart) == nil {
+		return ServerInfo{}, fmt.Errorf("invalid address or port %q", addrPart)
 	}
-
-	// JoinHostPort handles adding brackets for IPv6 automatically if needed
-	// Ensure 'host' used here is the correct part (potentially salvaged, or original if no port)
-	// For IPv6, 'host' should NOT have brackets when passed to JoinHostPort if SplitHostPort failed.
-	// However, if SplitHostPort succeeded, 'host' might already have brackets.
-	// net.JoinHostPort correctly handles both bracketed and non-bracketed IPv6 hosts.
-	finalAddr := net.JoinHostPort(host, port)
-	return ServerInfo{Address: finalAddr, Protocol: protocol, Hostname: hostname}, nil
+	if err := validatePort(port); err != nil {
+		return ServerInfo{}, err
+	}
+	if !isValidHostname(host) || (net.ParseIP(host) == nil && !strings.Contains(host, ".")) {
+		return ServerInfo{}, fmt.Errorf("invalid host %q", host)
+	}
+	return ServerInfo{Address: net.JoinHostPort(host, port), Protocol: protocol, Hostname: host}, nil
 }
 
 // parseAndDeduplicateServers parses a list of server endpoint strings,
 // converts them to ServerInfo structs, and removes duplicate entries.
-// Deduplication is based on the String() representation of ServerInfo.
+// Entries are deduplicated by protocol and address.
 func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 	seen := make(map[string]struct{})
 	result := make([]ServerInfo, 0)
@@ -492,8 +491,9 @@ func parseAndDeduplicateServers(serverStrings []string) []ServerInfo {
 			fmt.Fprintf(os.Stderr, "Warning: Skipping invalid server endpoint '%s': %v\n", s, err)
 			continue // Skip adding this server
 		}
+		info.Metadata = catalog.Metadata{Provider: "custom", Profile: "custom", Roles: []string{"custom"}, FilteringPolicy: "unknown", ECS: "unknown", IPFamily: addressFamily(info.Hostname), Transport: string(info.Protocol), TLSServerName: customTLSServerName(info)}
 		// Deduplicate entries by protocol+address, allowing same address under different protocols
-		key := fmt.Sprintf("%s|%s", info.Protocol, info.Address)
+		key := endpointKey(info)
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			result = append(result, info)
@@ -541,7 +541,7 @@ func getSystemDNSServers() ([]string, error) {
 }
 
 // loadAccuracyCheckFile reads an accuracy check file to get a domain and expected IP.
-// The file should have lines of 'domain IP', and the first valid entry is used.
+// The file should have lines of 'domain IP[,IP...]', and the first valid entry is used.
 // Invalid lines or IPs are skipped with warnings. Returns error if no valid entry is found.
 func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error) {
 	file, err := os.Open(filePath)
@@ -573,9 +573,13 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 
 		domainToCheck := strings.TrimSuffix(parts[0], ".") // Domain for validation
 		ipToCheck := parts[1]
-
-		parsedIP := net.ParseIP(ipToCheck)
-		if parsedIP == nil {
+		validIPs := true
+		for _, ip := range strings.Split(ipToCheck, ",") {
+			if net.ParseIP(ip) == nil {
+				validIPs = false
+			}
+		}
+		if !validIPs {
 			fmt.Fprintf(
 				os.Stderr,
 				"Warning: Skipping invalid IP in accuracy file %s (line %d): %s\n",
@@ -600,7 +604,7 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 
 		// If all checks passed for this line, return it as the first valid pair
 		// Ensure returned domain has trailing dot
-		return domainToCheck + ".", parsedIP.String(), nil
+		return domainToCheck + ".", ipToCheck, nil
 	}
 	// If loop finishes without returning, check for scanner errors first
 	if err := scanner.Err(); err != nil {
@@ -608,4 +612,17 @@ func loadAccuracyCheckFile(filePath string) (domain string, ip string, err error
 	}
 	// If no scanner error and no valid line found, return the specific error
 	return "", "", fmt.Errorf("no valid 'domain IP' pairs found in %s", filePath)
+}
+
+// customTLSServerName returns the name a custom -f endpoint authenticates as:
+// its hostname for TLS transports (DoT, DoH, DoQ), and empty for plaintext
+// transports or IP-literal hosts, which have no TLS name to report.
+func customTLSServerName(info ServerInfo) string {
+	switch info.Protocol {
+	case DOT, DOH, DOQ:
+		if net.ParseIP(info.Hostname) == nil {
+			return info.Hostname
+		}
+	}
+	return ""
 }

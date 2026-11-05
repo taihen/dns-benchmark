@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"io"
 	"net"
 	"os"
@@ -334,6 +335,9 @@ func TestParseServerString(t *testing.T) {
 				t.Errorf("parseServerString() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+			if tt.wantErr {
+				return
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseServerString() got = %#v, want %#v", got, tt.want)
 			}
@@ -551,6 +555,9 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 			// Sort both slices for consistent comparison as order isn't guaranteed
 			sortServerInfos(got)
 			sortServerInfos(tt.want)
+			for i := range got {
+				got[i].Metadata = catalog.Metadata{}
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseAndDeduplicateServers() got = %v, want %v", got, tt.want)
 			}
@@ -559,6 +566,10 @@ func TestParseAndDeduplicateServers(t *testing.T) {
 }
 
 func TestDefaultDNSStringsDoesNotIncludeDNS0EU(t *testing.T) {
+	defaults, err := DefaultDNSStrings()
+	if err != nil {
+		t.Fatalf("DefaultDNSStrings: %v", err)
+	}
 	disallowed := []string{
 		"193.110.81.0",
 		"185.253.5.0",
@@ -566,13 +577,17 @@ func TestDefaultDNSStringsDoesNotIncludeDNS0EU(t *testing.T) {
 	}
 
 	for _, entry := range disallowed {
-		if slices.Contains(DefaultDNSStrings, entry) {
+		if slices.Contains(defaults, entry) {
 			t.Fatalf("DefaultDNSStrings contains deprecated entry %q", entry)
 		}
 	}
 }
 
 func TestDefaultDNSStringsIncludesDNS4EUUnfiltered(t *testing.T) {
+	defaults, err := DefaultDNSStrings()
+	if err != nil {
+		t.Fatalf("DefaultDNSStrings: %v", err)
+	}
 	required := []string{
 		"86.54.11.100",
 		"tls://unfiltered.joindns4.eu",
@@ -580,7 +595,7 @@ func TestDefaultDNSStringsIncludesDNS4EUUnfiltered(t *testing.T) {
 	}
 
 	for _, entry := range required {
-		if !slices.Contains(DefaultDNSStrings, entry) {
+		if !slices.Contains(defaults, entry) {
 			t.Fatalf("DefaultDNSStrings is missing expected entry %q", entry)
 		}
 	}
@@ -902,10 +917,10 @@ func TestIsValidHostname(t *testing.T) {
 }
 
 func TestPrintVerboseConfig(t *testing.T) {
-	// Capture stdout to verify output
-	oldStdout := os.Stdout
+	// Capture stderr to verify output
+	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stderr = w
 
 	cfg := &Config{
 		ServersFile:         "servers.txt",
@@ -930,9 +945,9 @@ func TestPrintVerboseConfig(t *testing.T) {
 
 	printVerboseConfig(cfg)
 
-	// Close writer and restore stdout
+	// Close writer and restore stderr
 	_ = w.Close()
-	os.Stdout = oldStdout
+	os.Stderr = oldStderr
 
 	// Read captured output
 	var outBuf []byte
@@ -958,10 +973,10 @@ func TestPrintVerboseConfig(t *testing.T) {
 }
 
 func TestPrintVerboseConfigNoAccuracy(t *testing.T) {
-	// Capture stdout to verify output
-	oldStdout := os.Stdout
+	// Capture stderr to verify output
+	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
-	os.Stdout = w
+	os.Stderr = w
 
 	cfg := &Config{
 		Servers:           []ServerInfo{{Address: "1.1.1.1:53", Protocol: UDP}},
@@ -977,9 +992,9 @@ func TestPrintVerboseConfigNoAccuracy(t *testing.T) {
 
 	printVerboseConfig(cfg)
 
-	// Close writer and restore stdout
+	// Close writer and restore stderr
 	_ = w.Close()
-	os.Stdout = oldStdout
+	os.Stderr = oldStderr
 
 	// Read captured output
 	var outBuf []byte

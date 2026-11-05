@@ -1,0 +1,2714 @@
+{
+  "version": "2026-11-03.1",
+  "profiles": [
+    {
+      "id": "cloudflare-standard",
+      "provider": "Cloudflare",
+      "displayName": "Cloudflare Standard",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "disabled",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cloudflare-standard-udp-ipv4",
+          "protocol": "udp",
+          "address": "1.1.1.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-standard-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "1.1.1.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-standard-dot-ipv4",
+          "protocol": "dot",
+          "address": "1.1.1.1",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "one.one.one.one"
+        },
+        {
+          "id": "cloudflare-standard-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://cloudflare-dns.com/dns-query",
+          "tlsServerName": "cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-standard-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:4700:4700::1111",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-standard-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:4700:4700::1111",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-standard-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:4700:4700::1111",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "one.one.one.one"
+        },
+        {
+          "id": "cloudflare-standard-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://cloudflare-dns.com/dns-query",
+          "tlsServerName": "cloudflare-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://developers.cloudflare.com/1.1.1.1/ip-addresses/",
+        "https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-tls/",
+        "https://developers.cloudflare.com/1.1.1.1/setup/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "cloudflare-security",
+      "provider": "Cloudflare",
+      "displayName": "Cloudflare Security",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware",
+      "ecs": "disabled",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cloudflare-security-udp-ipv4",
+          "protocol": "udp",
+          "address": "1.1.1.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-security-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "1.1.1.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-security-dot-ipv4",
+          "protocol": "dot",
+          "address": "1.1.1.2",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "security.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-security-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://security.cloudflare-dns.com/dns-query",
+          "tlsServerName": "security.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-security-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:4700:4700::1112",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-security-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:4700:4700::1112",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-security-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:4700:4700::1112",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "security.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-security-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://security.cloudflare-dns.com/dns-query",
+          "tlsServerName": "security.cloudflare-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://developers.cloudflare.com/1.1.1.1/ip-addresses/",
+        "https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-tls/",
+        "https://developers.cloudflare.com/1.1.1.1/setup/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false,
+      "filteringProbeDomains": [
+        "malware.testcategory.com."
+      ]
+    },
+    {
+      "id": "cloudflare-family",
+      "provider": "Cloudflare",
+      "displayName": "Cloudflare Family",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "malware+adult",
+      "ecs": "disabled",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cloudflare-family-udp-ipv4",
+          "protocol": "udp",
+          "address": "1.1.1.3",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-family-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "1.1.1.3",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cloudflare-family-dot-ipv4",
+          "protocol": "dot",
+          "address": "1.1.1.3",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-family-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://family.cloudflare-dns.com/dns-query",
+          "tlsServerName": "family.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-family-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:4700:4700::1113",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-family-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:4700:4700::1113",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cloudflare-family-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:4700:4700::1113",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family.cloudflare-dns.com"
+        },
+        {
+          "id": "cloudflare-family-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://family.cloudflare-dns.com/dns-query",
+          "tlsServerName": "family.cloudflare-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://developers.cloudflare.com/1.1.1.1/ip-addresses/",
+        "https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-tls/",
+        "https://developers.cloudflare.com/1.1.1.1/setup/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false,
+      "filteringProbeDomains": [
+        "malware.testcategory.com.",
+        "nudity.testcategory.com."
+      ]
+    },
+    {
+      "id": "google-standard",
+      "provider": "Google",
+      "displayName": "Google Standard",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "enabled",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "google-standard-udp-ipv4",
+          "protocol": "udp",
+          "address": "8.8.8.8",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "google-standard-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "8.8.8.8",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "google-standard-dot-ipv4",
+          "protocol": "dot",
+          "address": "8.8.8.8",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns.google"
+        },
+        {
+          "id": "google-standard-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns.google/dns-query",
+          "tlsServerName": "dns.google"
+        },
+        {
+          "id": "google-standard-udp-ipv6",
+          "protocol": "udp",
+          "address": "2001:4860:4860::8888",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "google-standard-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2001:4860:4860::8888",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "google-standard-dot-ipv6",
+          "protocol": "dot",
+          "address": "2001:4860:4860::8888",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns.google"
+        },
+        {
+          "id": "google-standard-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns.google/dns-query",
+          "tlsServerName": "dns.google"
+        }
+      ],
+      "sourceURLs": [
+        "https://developers.google.com/speed/public-dns/docs/using",
+        "https://developers.google.com/speed/public-dns/docs/secure-transports"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "quad9-secure",
+      "provider": "Quad9",
+      "displayName": "Quad9 Secure",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware",
+      "ecs": "disabled",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "quad9-secure-udp-ipv4",
+          "protocol": "udp",
+          "address": "9.9.9.9",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-secure-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "9.9.9.9",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-secure-dot-ipv4",
+          "protocol": "dot",
+          "address": "9.9.9.9",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns.quad9.net"
+        },
+        {
+          "id": "quad9-secure-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns.quad9.net/dns-query",
+          "tlsServerName": "dns.quad9.net"
+        },
+        {
+          "id": "quad9-secure-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:fe::fe",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-secure-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:fe::fe",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-secure-dot-ipv6",
+          "protocol": "dot",
+          "address": "2620:fe::fe",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns.quad9.net"
+        },
+        {
+          "id": "quad9-secure-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns.quad9.net/dns-query",
+          "tlsServerName": "dns.quad9.net"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.quad9.net/services/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "quad9-unfiltered",
+      "provider": "Quad9",
+      "displayName": "Quad9 Unfiltered",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "disabled",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "quad9-unfiltered-udp-ipv4",
+          "protocol": "udp",
+          "address": "9.9.9.10",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-unfiltered-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "9.9.9.10",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-unfiltered-dot-ipv4",
+          "protocol": "dot",
+          "address": "9.9.9.10",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns10.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns10.quad9.net/dns-query",
+          "tlsServerName": "dns10.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:fe::10",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-unfiltered-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:fe::10",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-unfiltered-dot-ipv6",
+          "protocol": "dot",
+          "address": "2620:fe::10",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns10.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns10.quad9.net/dns-query",
+          "tlsServerName": "dns10.quad9.net"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.quad9.net/services/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "quad9-secure-ecs",
+      "provider": "Quad9",
+      "displayName": "Quad9 Secure Ecs",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware",
+      "ecs": "enabled",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "quad9-secure-ecs-udp-ipv4",
+          "protocol": "udp",
+          "address": "9.9.9.11",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-secure-ecs-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "9.9.9.11",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-secure-ecs-dot-ipv4",
+          "protocol": "dot",
+          "address": "9.9.9.11",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns11.quad9.net"
+        },
+        {
+          "id": "quad9-secure-ecs-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns11.quad9.net/dns-query",
+          "tlsServerName": "dns11.quad9.net"
+        },
+        {
+          "id": "quad9-secure-ecs-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:fe::11",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-secure-ecs-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:fe::11",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-secure-ecs-dot-ipv6",
+          "protocol": "dot",
+          "address": "2620:fe::11",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns11.quad9.net"
+        },
+        {
+          "id": "quad9-secure-ecs-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns11.quad9.net/dns-query",
+          "tlsServerName": "dns11.quad9.net"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.quad9.net/services/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "quad9-unfiltered-ecs",
+      "provider": "Quad9",
+      "displayName": "Quad9 Unfiltered Ecs",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "enabled",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "quad9-unfiltered-ecs-udp-ipv4",
+          "protocol": "udp",
+          "address": "9.9.9.12",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "9.9.9.12",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-dot-ipv4",
+          "protocol": "dot",
+          "address": "9.9.9.12",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns12.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns12.quad9.net/dns-query",
+          "tlsServerName": "dns12.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:fe::12",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:fe::12",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-dot-ipv6",
+          "protocol": "dot",
+          "address": "2620:fe::12",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns12.quad9.net"
+        },
+        {
+          "id": "quad9-unfiltered-ecs-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns12.quad9.net/dns-query",
+          "tlsServerName": "dns12.quad9.net"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.quad9.net/services/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "adguard-default",
+      "provider": "AdGuard",
+      "displayName": "Adguard Default",
+      "roles": [
+        "ads"
+      ],
+      "filteringPolicy": "ads+trackers",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "adguard-default-udp-ipv4",
+          "protocol": "udp",
+          "address": "94.140.14.14",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-default-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "94.140.14.14",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-default-dot-ipv4",
+          "protocol": "dot",
+          "address": "94.140.14.14",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns.adguard-dns.com"
+        },
+        {
+          "id": "adguard-default-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://dns.adguard-dns.com/dns-query",
+          "tlsServerName": "dns.adguard-dns.com"
+        },
+        {
+          "id": "adguard-default-doq-ipv4",
+          "protocol": "doq",
+          "address": "94.140.14.14",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns.adguard-dns.com"
+        },
+        {
+          "id": "adguard-default-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a10:50c0::ad1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-default-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a10:50c0::ad1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-default-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a10:50c0::ad1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns.adguard-dns.com"
+        },
+        {
+          "id": "adguard-default-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://dns.adguard-dns.com/dns-query",
+          "tlsServerName": "dns.adguard-dns.com"
+        },
+        {
+          "id": "adguard-default-doq-ipv6",
+          "protocol": "doq",
+          "address": "2a10:50c0::ad1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns.adguard-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://adguard-dns.io/en/public-dns.html"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "adguard-unfiltered",
+      "provider": "AdGuard",
+      "displayName": "Adguard Unfiltered",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "adguard-unfiltered-udp-ipv4",
+          "protocol": "udp",
+          "address": "94.140.14.140",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-unfiltered-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "94.140.14.140",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-unfiltered-dot-ipv4",
+          "protocol": "dot",
+          "address": "94.140.14.140",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        },
+        {
+          "id": "adguard-unfiltered-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://unfiltered.adguard-dns.com/dns-query",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        },
+        {
+          "id": "adguard-unfiltered-doq-ipv4",
+          "protocol": "doq",
+          "address": "94.140.14.140",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        },
+        {
+          "id": "adguard-unfiltered-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a10:50c0::1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-unfiltered-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a10:50c0::1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-unfiltered-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a10:50c0::1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        },
+        {
+          "id": "adguard-unfiltered-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://unfiltered.adguard-dns.com/dns-query",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        },
+        {
+          "id": "adguard-unfiltered-doq-ipv6",
+          "protocol": "doq",
+          "address": "2a10:50c0::1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "unfiltered.adguard-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://adguard-dns.io/en/public-dns.html"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "adguard-family",
+      "provider": "AdGuard",
+      "displayName": "Adguard Family",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "ads+trackers+adult",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "adguard-family-udp-ipv4",
+          "protocol": "udp",
+          "address": "94.140.14.15",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-family-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "94.140.14.15",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "adguard-family-dot-ipv4",
+          "protocol": "dot",
+          "address": "94.140.14.15",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family.adguard-dns.com"
+        },
+        {
+          "id": "adguard-family-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://family.adguard-dns.com/dns-query",
+          "tlsServerName": "family.adguard-dns.com"
+        },
+        {
+          "id": "adguard-family-doq-ipv4",
+          "protocol": "doq",
+          "address": "94.140.14.15",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family.adguard-dns.com"
+        },
+        {
+          "id": "adguard-family-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a10:50c0::bad1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-family-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a10:50c0::bad1:ff",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "adguard-family-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a10:50c0::bad1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family.adguard-dns.com"
+        },
+        {
+          "id": "adguard-family-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://family.adguard-dns.com/dns-query",
+          "tlsServerName": "family.adguard-dns.com"
+        },
+        {
+          "id": "adguard-family-doq-ipv6",
+          "protocol": "doq",
+          "address": "2a10:50c0::bad1:ff",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family.adguard-dns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://adguard-dns.io/en/public-dns.html"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dns4eu-protective",
+      "provider": "DNS4EU",
+      "displayName": "Dns4Eu Protective",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware+legal",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dns4eu-protective-udp-ipv4",
+          "protocol": "udp",
+          "address": "86.54.11.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-protective-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "86.54.11.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-protective-dot-ipv4",
+          "protocol": "dot",
+          "address": "86.54.11.1",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "protective.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-protective-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://protective.joindns4.eu/dns-query",
+          "tlsServerName": "protective.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-protective-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a13:1001::86:54:11:1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-protective-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a13:1001::86:54:11:1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-protective-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a13:1001::86:54:11:1",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "protective.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-protective-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://protective.joindns4.eu/dns-query",
+          "tlsServerName": "protective.joindns4.eu"
+        }
+      ],
+      "sourceURLs": [
+        "https://joindns4.eu/for-public"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dns4eu-child",
+      "provider": "DNS4EU",
+      "displayName": "Dns4Eu Child",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "malware+child+legal",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dns4eu-child-udp-ipv4",
+          "protocol": "udp",
+          "address": "86.54.11.12",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-child-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "86.54.11.12",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-child-dot-ipv4",
+          "protocol": "dot",
+          "address": "86.54.11.12",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "child.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://child.joindns4.eu/dns-query",
+          "tlsServerName": "child.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a13:1001::86:54:11:12",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-child-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a13:1001::86:54:11:12",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-child-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a13:1001::86:54:11:12",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "child.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://child.joindns4.eu/dns-query",
+          "tlsServerName": "child.joindns4.eu"
+        }
+      ],
+      "sourceURLs": [
+        "https://joindns4.eu/for-public"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dns4eu-noads",
+      "provider": "DNS4EU",
+      "displayName": "Dns4Eu Noads",
+      "roles": [
+        "ads"
+      ],
+      "filteringPolicy": "malware+ads+legal",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dns4eu-noads-udp-ipv4",
+          "protocol": "udp",
+          "address": "86.54.11.13",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-noads-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "86.54.11.13",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-noads-dot-ipv4",
+          "protocol": "dot",
+          "address": "86.54.11.13",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-noads-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://noads.joindns4.eu/dns-query",
+          "tlsServerName": "noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-noads-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a13:1001::86:54:11:13",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-noads-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a13:1001::86:54:11:13",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-noads-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a13:1001::86:54:11:13",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-noads-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://noads.joindns4.eu/dns-query",
+          "tlsServerName": "noads.joindns4.eu"
+        }
+      ],
+      "sourceURLs": [
+        "https://joindns4.eu/for-public"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dns4eu-child-noads",
+      "provider": "DNS4EU",
+      "displayName": "Dns4Eu Child Noads",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "malware+child+ads+legal",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dns4eu-child-noads-udp-ipv4",
+          "protocol": "udp",
+          "address": "86.54.11.11",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-child-noads-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "86.54.11.11",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-child-noads-dot-ipv4",
+          "protocol": "dot",
+          "address": "86.54.11.11",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "child-noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-noads-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://child-noads.joindns4.eu/dns-query",
+          "tlsServerName": "child-noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-noads-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a13:1001::86:54:11:11",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-child-noads-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a13:1001::86:54:11:11",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-child-noads-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a13:1001::86:54:11:11",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "child-noads.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-child-noads-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://child-noads.joindns4.eu/dns-query",
+          "tlsServerName": "child-noads.joindns4.eu"
+        }
+      ],
+      "sourceURLs": [
+        "https://joindns4.eu/for-public"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dns4eu-unfiltered",
+      "provider": "DNS4EU",
+      "displayName": "Dns4Eu Unfiltered",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "legal-only",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dns4eu-unfiltered-udp-ipv4",
+          "protocol": "udp",
+          "address": "86.54.11.100",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-unfiltered-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "86.54.11.100",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dns4eu-unfiltered-dot-ipv4",
+          "protocol": "dot",
+          "address": "86.54.11.100",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "unfiltered.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-unfiltered-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://unfiltered.joindns4.eu/dns-query",
+          "tlsServerName": "unfiltered.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-unfiltered-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a13:1001::86:54:11:100",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-unfiltered-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a13:1001::86:54:11:100",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dns4eu-unfiltered-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a13:1001::86:54:11:100",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "unfiltered.joindns4.eu"
+        },
+        {
+          "id": "dns4eu-unfiltered-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://unfiltered.joindns4.eu/dns-query",
+          "tlsServerName": "unfiltered.joindns4.eu"
+        }
+      ],
+      "sourceURLs": [
+        "https://joindns4.eu/for-public"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "controld-p0",
+      "provider": "Control D",
+      "displayName": "Controld P0",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p0-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.0",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p0-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.0",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p0-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.0",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p0.freedns.controld.com"
+        },
+        {
+          "id": "controld-p0-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/p0",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p0-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.0",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p0.freedns.controld.com"
+        },
+        {
+          "id": "controld-p0-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::0",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p0-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::0",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p0-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::0",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p0.freedns.controld.com"
+        },
+        {
+          "id": "controld-p0-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/p0",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p0-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::0",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p0.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "controld-p1",
+      "provider": "Control D",
+      "displayName": "Controld P1",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p1-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p1-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.1",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p1-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.1",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p1.freedns.controld.com"
+        },
+        {
+          "id": "controld-p1-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/p1",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p1-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.1",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p1.freedns.controld.com"
+        },
+        {
+          "id": "controld-p1-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p1-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p1-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::1",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p1.freedns.controld.com"
+        },
+        {
+          "id": "controld-p1-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/p1",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p1-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::1",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p1.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "controld-p2",
+      "provider": "Control D",
+      "displayName": "Controld P2",
+      "roles": [
+        "ads"
+      ],
+      "filteringPolicy": "ads+trackers",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p2-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p2-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p2-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.2",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p2.freedns.controld.com"
+        },
+        {
+          "id": "controld-p2-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/p2",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p2-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.2",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p2.freedns.controld.com"
+        },
+        {
+          "id": "controld-p2-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p2-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p2-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::2",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p2.freedns.controld.com"
+        },
+        {
+          "id": "controld-p2-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/p2",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p2-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::2",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p2.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "controld-p3",
+      "provider": "Control D",
+      "displayName": "Controld P3",
+      "roles": [
+        "social"
+      ],
+      "filteringPolicy": "social",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p3-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.3",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p3-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.3",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p3-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.3",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p3.freedns.controld.com"
+        },
+        {
+          "id": "controld-p3-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/p3",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p3-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.3",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "p3.freedns.controld.com"
+        },
+        {
+          "id": "controld-p3-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::3",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p3-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::3",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p3-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::3",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p3.freedns.controld.com"
+        },
+        {
+          "id": "controld-p3-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/p3",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p3-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::3",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "p3.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "controld-p4",
+      "provider": "Control D",
+      "displayName": "Controld P4",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "family",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p4-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.4",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p4-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.4",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p4-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.4",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family.freedns.controld.com"
+        },
+        {
+          "id": "controld-p4-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/family",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p4-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.4",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family.freedns.controld.com"
+        },
+        {
+          "id": "controld-p4-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::4",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p4-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::4",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p4-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::4",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family.freedns.controld.com"
+        },
+        {
+          "id": "controld-p4-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/family",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p4-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::4",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "controld-p5",
+      "provider": "Control D",
+      "displayName": "Controld P5",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "uncensored",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh",
+        "doq"
+      ],
+      "endpoints": [
+        {
+          "id": "controld-p5-udp-ipv4",
+          "protocol": "udp",
+          "address": "76.76.2.5",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p5-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "76.76.2.5",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "controld-p5-dot-ipv4",
+          "protocol": "dot",
+          "address": "76.76.2.5",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "uncensored.freedns.controld.com"
+        },
+        {
+          "id": "controld-p5-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://freedns.controld.com/uncensored",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p5-doq-ipv4",
+          "protocol": "doq",
+          "address": "76.76.2.5",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "uncensored.freedns.controld.com"
+        },
+        {
+          "id": "controld-p5-udp-ipv6",
+          "protocol": "udp",
+          "address": "2606:1a40::5",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p5-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2606:1a40::5",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "controld-p5-dot-ipv6",
+          "protocol": "dot",
+          "address": "2606:1a40::5",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "uncensored.freedns.controld.com"
+        },
+        {
+          "id": "controld-p5-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://freedns.controld.com/uncensored",
+          "tlsServerName": "freedns.controld.com"
+        },
+        {
+          "id": "controld-p5-doq-ipv6",
+          "protocol": "doq",
+          "address": "2606:1a40::5",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "uncensored.freedns.controld.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://docs.controld.com/docs/free-dns"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "cleanbrowsing-security",
+      "provider": "CleanBrowsing",
+      "displayName": "Cleanbrowsing Security",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "malware",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cleanbrowsing-security-udp-ipv4",
+          "protocol": "udp",
+          "address": "185.228.168.9",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-security-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "185.228.168.9",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-security-dot-ipv4",
+          "protocol": "dot",
+          "address": "185.228.168.9",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "security-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-security-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://doh.cleanbrowsing.org/doh/security-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-security-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a0d:2a00:1::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-security-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a0d:2a00:1::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-security-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a0d:2a00:1::2",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "security-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-security-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://doh.cleanbrowsing.org/doh/security-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        }
+      ],
+      "sourceURLs": [
+        "https://cleanbrowsing.org/filters"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "cleanbrowsing-adult",
+      "provider": "CleanBrowsing",
+      "displayName": "Cleanbrowsing Adult",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "malware+adult",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cleanbrowsing-adult-udp-ipv4",
+          "protocol": "udp",
+          "address": "185.228.168.10",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-adult-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "185.228.168.10",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-adult-dot-ipv4",
+          "protocol": "dot",
+          "address": "185.228.168.10",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "adult-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-adult-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://doh.cleanbrowsing.org/doh/adult-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-adult-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a0d:2a00:1::1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-adult-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a0d:2a00:1::1",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-adult-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a0d:2a00:1::1",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "adult-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-adult-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://doh.cleanbrowsing.org/doh/adult-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        }
+      ],
+      "sourceURLs": [
+        "https://cleanbrowsing.org/filters"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "cleanbrowsing-family",
+      "provider": "CleanBrowsing",
+      "displayName": "Cleanbrowsing Family",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "malware+adult+proxy+mixed-content",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "cleanbrowsing-family-udp-ipv4",
+          "protocol": "udp",
+          "address": "185.228.168.168",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-family-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "185.228.168.168",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "cleanbrowsing-family-dot-ipv4",
+          "protocol": "dot",
+          "address": "185.228.168.168",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "family-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-family-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://doh.cleanbrowsing.org/doh/family-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-family-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a0d:2a00:1::",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-family-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a0d:2a00:1::",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "cleanbrowsing-family-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a0d:2a00:1::",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "family-filter-dns.cleanbrowsing.org"
+        },
+        {
+          "id": "cleanbrowsing-family-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://doh.cleanbrowsing.org/doh/family-filter/",
+          "tlsServerName": "doh.cleanbrowsing.org"
+        }
+      ],
+      "sourceURLs": [
+        "https://cleanbrowsing.org/filters"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dnssb-standard",
+      "provider": "DNS.SB",
+      "displayName": "Dnssb Standard",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "unknown",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "dnssb-standard-udp-ipv4",
+          "protocol": "udp",
+          "address": "185.222.222.222",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dnssb-standard-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "185.222.222.222",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dnssb-standard-dot-ipv4",
+          "protocol": "dot",
+          "address": "185.222.222.222",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dot.sb"
+        },
+        {
+          "id": "dnssb-standard-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://doh.dns.sb/dns-query",
+          "tlsServerName": "doh.dns.sb"
+        },
+        {
+          "id": "dnssb-standard-udp-ipv6",
+          "protocol": "udp",
+          "address": "2a09::",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dnssb-standard-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2a09::",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dnssb-standard-dot-ipv6",
+          "protocol": "dot",
+          "address": "2a09::",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dot.sb"
+        },
+        {
+          "id": "dnssb-standard-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://doh.dns.sb/dns-query",
+          "tlsServerName": "doh.dns.sb"
+        }
+      ],
+      "sourceURLs": [
+        "https://dns.sb/guide/",
+        "https://dns.sb/dot/",
+        "https://dns.sb/doh/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "dnswatch-standard",
+      "provider": "DNS.WATCH",
+      "displayName": "Dnswatch Standard",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "unknown",
+      "dnssecClaim": "validating",
+      "protocols": [
+        "udp",
+        "tcp"
+      ],
+      "endpoints": [
+        {
+          "id": "dnswatch-standard-udp-ipv4",
+          "protocol": "udp",
+          "address": "84.200.69.80",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dnswatch-standard-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "84.200.69.80",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "dnswatch-standard-udp-ipv6",
+          "protocol": "udp",
+          "address": "2001:1608:10:25::1c04:b12f",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "dnswatch-standard-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2001:1608:10:25::1c04:b12f",
+          "port": 53,
+          "family": "ipv6"
+        }
+      ],
+      "sourceURLs": [
+        "https://dns.watch/"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "opendns-core",
+      "provider": "OpenDNS",
+      "displayName": "Opendns Core",
+      "roles": [
+        "security"
+      ],
+      "filteringPolicy": "security+configurable",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "dot",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "opendns-core-udp-ipv4",
+          "protocol": "udp",
+          "address": "208.67.222.222",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-core-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "208.67.222.222",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-core-dot-ipv4",
+          "protocol": "dot",
+          "address": "208.67.222.222",
+          "port": 853,
+          "family": "ipv4",
+          "tlsServerName": "dns.opendns.com"
+        },
+        {
+          "id": "opendns-core-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://doh.opendns.com/dns-query",
+          "tlsServerName": "doh.opendns.com"
+        },
+        {
+          "id": "opendns-core-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:119:35::35",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-core-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:119:35::35",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-core-dot-ipv6",
+          "protocol": "dot",
+          "address": "2620:119:35::35",
+          "port": 853,
+          "family": "ipv6",
+          "tlsServerName": "dns.opendns.com"
+        },
+        {
+          "id": "opendns-core-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://doh.opendns.com/dns-query",
+          "tlsServerName": "doh.opendns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://umbrella.cisco.com/blog/enhancing-support-dns-encryption-with-dns-over-https"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": true
+    },
+    {
+      "id": "opendns-familyshield",
+      "provider": "OpenDNS",
+      "displayName": "Opendns Familyshield",
+      "roles": [
+        "family"
+      ],
+      "filteringPolicy": "adult",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "opendns-familyshield-udp-ipv4",
+          "protocol": "udp",
+          "address": "208.67.222.123",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-familyshield-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "208.67.222.123",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-familyshield-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://familyshield.opendns.com/dns-query",
+          "tlsServerName": "familyshield.opendns.com"
+        },
+        {
+          "id": "opendns-familyshield-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:119:35::123",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-familyshield-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:119:35::123",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-familyshield-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://familyshield.opendns.com/dns-query",
+          "tlsServerName": "familyshield.opendns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://umbrella.cisco.com/blog/enhancing-support-dns-encryption-with-dns-over-https"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    },
+    {
+      "id": "opendns-sandbox",
+      "provider": "OpenDNS",
+      "displayName": "Opendns Sandbox",
+      "roles": [
+        "general"
+      ],
+      "filteringPolicy": "unfiltered",
+      "ecs": "unknown",
+      "dnssecClaim": "unknown",
+      "protocols": [
+        "udp",
+        "tcp",
+        "doh"
+      ],
+      "endpoints": [
+        {
+          "id": "opendns-sandbox-udp-ipv4",
+          "protocol": "udp",
+          "address": "208.67.222.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-sandbox-tcp-ipv4",
+          "protocol": "tcp",
+          "address": "208.67.222.2",
+          "port": 53,
+          "family": "ipv4"
+        },
+        {
+          "id": "opendns-sandbox-doh-ipv4",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv4",
+          "url": "https://sandbox.opendns.com/dns-query",
+          "tlsServerName": "sandbox.opendns.com"
+        },
+        {
+          "id": "opendns-sandbox-udp-ipv6",
+          "protocol": "udp",
+          "address": "2620:0:ccc::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-sandbox-tcp-ipv6",
+          "protocol": "tcp",
+          "address": "2620:0:ccc::2",
+          "port": 53,
+          "family": "ipv6"
+        },
+        {
+          "id": "opendns-sandbox-doh-ipv6",
+          "protocol": "doh",
+          "address": "",
+          "port": 443,
+          "family": "ipv6",
+          "url": "https://sandbox.opendns.com/dns-query",
+          "tlsServerName": "sandbox.opendns.com"
+        }
+      ],
+      "sourceURLs": [
+        "https://umbrella.cisco.com/blog/enhancing-support-dns-encryption-with-dns-over-https"
+      ],
+      "lastVerified": "2026-11-03",
+      "status": "active",
+      "legacy": false
+    }
+  ]
+}

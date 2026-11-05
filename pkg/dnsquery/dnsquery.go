@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -33,18 +36,31 @@ var (
 )
 
 const (
-	dnssecCheckDomain         = "dnssec-failed.org."
+	dnssecCheckDomain = "dnssec-failed.org."
+	// dnssecControlDomain is a long-standing correctly signed zone. Validating
+	// resolvers answer it normally, so it separates DNSSEC validation failures
+	// from resolvers that return SERVFAIL for everything.
+	dnssecControlDomain       = "ietf.org."
 	nxdomainCheckDomainPrefix = "nxdomain-test-"
 	nxdomainCheckDomainSuffix = ".invalid."
-	rebindingCheckDomain      = "private.dns-rebinding-test.com." // Placeholder - requires a real domain resolving to private IP
-	dotcomCheckPrefix         = "dnsbench-dotcom-"
-	dotcomCheckSuffix         = ".com."
-	dohUserAgent              = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
 
-	// QUIC connection pool configuration
+	dotcomCheckPrefix = "dnsbench-dotcom-"
+	dotcomCheckSuffix = ".com."
+	// uncachedQuerySuffix is the zone for random uncached latency names. Those
+	// names reuse nxdomainCheckDomainPrefix as their label prefix, so changing
+	// that prefix also changes the latency query names.
+	uncachedQuerySuffix = ".net."
+	dohUserAgent        = "dns-benchmark/1.0 (+https://github.com/taihen/dns-benchmark)"
+
+	// QUIC connection pool configuration. Live sessions are kept for as long
+	// as they are in use, so long runs do not pay a fresh handshake inside
+	// timed queries; only closed sessions and those idle for maxIdleTime are
+	// removed.
 	maxPooledConnections = 10
-	connectionTTL        = 30 * time.Second
 	maxIdleTime          = 15 * time.Second
+	// maxDoQDialTime caps a DoQ dial in addition to the -t handshake idle
+	// timeout.
+	maxDoQDialTime = 10 * time.Second
 )
 
 // QueryResult holds the result of a single DNS query.
@@ -65,18 +81,24 @@ const (
 	OutcomeMalformed  QueryOutcome = "malformed_response"
 )
 
-// quicConnection represents a pooled QUIC connection
+// quicConnection represents a pooled QUIC connection. DoQ sends each query on
+// its own stream (RFC 9250, section 4.2), so one session serves concurrent
+// queries; streams counts the queries currently using it.
 type quicConnection struct {
 	session   *quic.Conn
 	lastUsed  time.Time
 	createdAt time.Time
-	inUse     bool
+	streams   int
 }
 
 // quicConnectionPool manages QUIC connections for DoQ queries
 type quicConnectionPool struct {
 	mu           sync.RWMutex
-	connections  map[string][]*quicConnection // key: serverAddress
+	connections  map[string][]*quicConnection // key: serverAddress|serverName
+	dialing      map[string]int               // in-flight dials reserving pool slots
+	resolvedMu   sync.Mutex
+	resolved     map[string]string // network|host:port -> pinned ip:port
+	closed       bool
 	cleanup      chan struct{}
 	cleanupDone  chan struct{}
 	shutdownOnce sync.Once
@@ -85,6 +107,8 @@ type quicConnectionPool struct {
 func newQuicConnectionPool() *quicConnectionPool {
 	pool := &quicConnectionPool{
 		connections: make(map[string][]*quicConnection),
+		dialing:     make(map[string]int),
+		resolved:    make(map[string]string),
 		cleanup:     make(chan struct{}),
 		cleanupDone: make(chan struct{}),
 	}
@@ -109,7 +133,9 @@ func (p *quicConnectionPool) startCleanup() {
 	}
 }
 
-// cleanupStaleConnections removes expired and idle connections
+// cleanupStaleConnections removes closed connections and connections that
+// have been idle for longer than maxIdleTime. Sessions are not aged out while
+// they are still being used, so a long run keeps its warmed sessions.
 func (p *quicConnectionPool) cleanupStaleConnections() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -119,10 +145,10 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 		var activeConns []*quicConnection
 
 		for _, conn := range conns {
-			// Remove connections that are too old or have been idle too long
-			if !conn.inUse &&
-				(now.Sub(conn.createdAt) > connectionTTL ||
-					now.Sub(conn.lastUsed) > maxIdleTime) {
+			if sessionClosed(conn.session) {
+				continue
+			}
+			if conn.streams == 0 && now.Sub(conn.lastUsed) > maxIdleTime {
 				if conn.session != nil {
 					_ = conn.session.CloseWithError(0, "cleanup")
 				}
@@ -139,73 +165,98 @@ func (p *quicConnectionPool) cleanupStaleConnections() {
 	}
 }
 
-// getConnection retrieves or creates a QUIC connection for the server.
-// The returned bool indicates whether the session is pooled.
-func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config) (*quic.Conn, bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// sessionClosed reports whether a pooled QUIC session has terminated.
+func sessionClosed(session *quic.Conn) bool {
+	if session == nil {
+		return false
+	}
+	select {
+	case <-session.Context().Done():
+		return true
+	default:
+		return false
+	}
+}
 
-	// Look for an available connection
-	if conns, exists := p.connections[serverAddr]; exists {
-		for _, conn := range conns {
-			// Check if connection is still valid and not in use
-			if !conn.inUse {
-				select {
-				case <-conn.session.Context().Done():
-					// Connection is closed, remove it
-					continue
-				default:
-					// Connection is still valid, mark as in use
-					conn.inUse = true
-					conn.lastUsed = time.Now()
-					return conn.session, true, nil
-				}
-			}
+// getConnection retrieves or creates a QUIC connection for the server.
+// A live pooled session is shared by concurrent queries, each on its own
+// stream, so the session opened by the warm-up query serves the scored
+// queries that follow instead of each concurrent query dialling its own.
+// The returned bool indicates whether the session is pooled. The pool lock is
+// never held while dialling, so an unreachable endpoint cannot delay queries
+// to other endpoints; in-flight dials reserve pool slots to keep the limit.
+// handshakeTimeout bounds the QUIC handshake idle time so the user's -t timeout
+// applies instead of quic-go's 5s default; the whole dial is additionally
+// capped at maxDoQDialTime.
+func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr string, tlsConfig *tls.Config, handshakeTimeout time.Duration) (*quic.Conn, bool, error) {
+	key := serverAddr + "|" + tlsConfig.ServerName
+
+	p.mu.Lock()
+	for _, conn := range p.connections[key] {
+		select {
+		case <-conn.session.Context().Done():
+			// Connection is closed; cleanup removes it.
+			continue
+		default:
+			conn.streams++
+			conn.lastUsed = time.Now()
+			p.mu.Unlock()
+			return conn.session, true, nil
 		}
 	}
+	// Reserve a pool slot when under the limit; otherwise dial a temporary
+	// connection that the caller closes after use.
+	pooled := !p.closed && len(p.connections[key])+p.dialing[key] < maxPooledConnections
+	if pooled {
+		p.dialing[key]++
+	}
+	p.mu.Unlock()
 
-	// No available connection, create a new one if under limit
-	if conns := p.connections[serverAddr]; len(conns) >= maxPooledConnections {
-		// Pool is full, create a temporary connection (not pooled)
-		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+	dialCtx, cancel := context.WithTimeout(ctx, maxDoQDialTime)
+	defer cancel()
+	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, &quic.Config{HandshakeIdleTimeout: handshakeTimeout})
+
+	if !pooled {
 		if err != nil {
 			return nil, false, err
 		}
 		return session, false, nil
 	}
 
-	// Create new connection
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	session, err := quic.DialAddrEarly(dialCtx, serverAddr, tlsConfig, nil)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dialing[key]--
+	if p.dialing[key] == 0 {
+		delete(p.dialing, key)
+	}
 	if err != nil {
 		return nil, false, err
 	}
-
-	// Add to pool
-	conn := &quicConnection{
-		session:   session,
-		lastUsed:  time.Now(),
-		createdAt: time.Now(),
-		inUse:     true,
+	if p.closed {
+		// The pool shut down during the dial; hand back a temporary session.
+		return session, false, nil
 	}
-
-	p.connections[serverAddr] = append(p.connections[serverAddr], conn)
+	now := time.Now()
+	p.connections[key] = append(p.connections[key], &quicConnection{
+		session:   session,
+		lastUsed:  now,
+		createdAt: now,
+		streams:   1,
+	})
 	return session, true, nil
 }
 
-// returnConnection marks a connection as available for reuse
+// returnConnection releases one query's use of a pooled connection.
 func (p *quicConnectionPool) returnConnection(serverAddr string, session *quic.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if conns, exists := p.connections[serverAddr]; exists {
+	for _, conns := range p.connections {
 		for _, conn := range conns {
 			if conn.session == session {
-				conn.inUse = false
+				if conn.streams > 0 {
+					conn.streams--
+				}
 				conn.lastUsed = time.Now()
 				return
 			}
@@ -226,6 +277,7 @@ func (p *quicConnectionPool) closeAllConnections() {
 		}
 	}
 	p.connections = make(map[string][]*quicConnection)
+	p.closed = true
 }
 
 // shutdownPool gracefully shuts down the connection pool
@@ -236,9 +288,13 @@ func (p *quicConnectionPool) shutdownPool() {
 	})
 }
 
-// performQueryWithClient performs a DNS query using a provided dns.Client.
-// It sets up the query message, including EDNS0 for DNSSEC, and handles the client exchange.
-func performQueryWithClient(ctx context.Context, client *dns.Client, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
+// DNSExchanger permits local fixtures and alternate DNS clients.
+type DNSExchanger interface {
+	ExchangeContext(context.Context, *dns.Msg, string) (*dns.Msg, time.Duration, error)
+}
+
+// performQueryWithClient exchanges and validates a DNS message using an injectable client.
+func performQueryWithClient(ctx context.Context, client DNSExchanger, serverAddr, domain string, qType uint16, timeout time.Duration) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
 	msg.SetEdns0(4096, true) // Opt-in to DNSSEC requests via EDNS0
@@ -254,7 +310,7 @@ func performQueryWithClient(ctx context.Context, client *dns.Client, serverAddr,
 		return QueryResult{Error: fmt.Errorf("query failed: %w", err)}
 	}
 	if response == nil {
-		return QueryResult{Error: fmt.Errorf("query succeeded but response was nil")}
+		return QueryResult{Error: &ResponseValidationError{Reason: "query succeeded but response was nil"}}
 	}
 	if err := validateResponseMatchesQuery(msg, response); err != nil {
 		return QueryResult{Error: fmt.Errorf("invalid dns response: %w", err)}
@@ -264,25 +320,26 @@ func performQueryWithClient(ctx context.Context, client *dns.Client, serverAddr,
 
 // performUDPQuery performs a DNS query over UDP.
 func performUDPQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-	client := &dns.Client{Net: "udp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
+	client := &dns.Client{Net: networkForFamily("udp", serverInfo.IPFamily), Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
 	return performQueryWithClient(ctx, client, serverInfo.Address, domain, qType, timeout)
 }
 
 // performTCPQuery performs a DNS query over TCP.
 func performTCPQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
-	client := &dns.Client{Net: "tcp", Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
+	client := &dns.Client{Net: networkForFamily("tcp", serverInfo.IPFamily), Timeout: timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout}
 	return performQueryWithClient(ctx, client, serverInfo.Address, domain, qType, timeout)
 }
 
 // performDoTQuery performs a DNS query over TLS (DoT).
-// It configures TLS settings and uses the "tcp-tls" network.
+// It uses the "tcp-tls" network, or "tcp4-tls"/"tcp6-tls" when a family is forced.
 func performDoTQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration) QueryResult {
 	tlsConfig := &tls.Config{
-		ServerName: serverInfo.Hostname, // for SNI
+		ServerName: authenticationName(serverInfo),
+		RootCAs:    serverInfo.TLSRootCAs,
 		MinVersion: tls.VersionTLS12,
 	}
 	client := &dns.Client{
-		Net:       "tcp-tls",
+		Net:       networkForFamily("tcp", serverInfo.IPFamily) + "-tls",
 		TLSConfig: tlsConfig,
 		Timeout:   timeout, DialTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout,
 	}
@@ -303,7 +360,8 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	}
 
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: timeout}
+		httpClient = newDoHClient(serverInfo, timeout)
+		defer httpClient.CloseIdleConnections()
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -320,7 +378,6 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 
 	startTime := time.Now()
 	httpResp, err := httpClient.Do(req)
-	latency := time.Since(startTime)
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -334,7 +391,15 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		return QueryResult{Error: fmt.Errorf("doh query failed with status code %d", httpResp.StatusCode)}
 	}
 
-	body, err := io.ReadAll(httpResp.Body)
+	mediaType, _, typeErr := mime.ParseMediaType(httpResp.Header.Get("Content-Type"))
+	if typeErr != nil || mediaType != "application/dns-message" {
+		return QueryResult{Error: &ResponseValidationError{Reason: "invalid DoH content type"}}
+	}
+	const maxDoHResponseSize = 65535
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxDoHResponseSize+1))
+	if len(body) > maxDoHResponseSize {
+		return QueryResult{Error: &ResponseValidationError{Reason: "DoH response exceeds 65535 bytes"}}
+	}
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("failed to read DoH response body: %w", err)}
 	}
@@ -347,7 +412,60 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		return QueryResult{Error: fmt.Errorf("invalid DoH response: %w", err)}
 	}
 
-	return QueryResult{Latency: latency, Response: response, Error: nil}
+	return QueryResult{Latency: time.Since(startTime), Response: response, Error: nil}
+}
+
+// resolveForFamily returns the address to dial for a DoQ endpoint. Endpoints
+// with an IP literal, or without a forced IP family, are dialled as given.
+// A hostname with a forced family is resolved once with the system resolver
+// and the first address is reused for later queries; failures are not cached.
+func (p *quicConnectionPool) resolveForFamily(ctx context.Context, serverInfo config.ServerInfo, timeout time.Duration) (string, error) {
+	address := serverInfo.Address
+	if serverInfo.IPFamily != "ipv4" && serverInfo.IPFamily != "ipv6" {
+		return address, nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("doq invalid address %s: %w", address, err)
+	}
+	if net.ParseIP(host) != nil {
+		return address, nil
+	}
+	network := "ip4"
+	if serverInfo.IPFamily == "ipv6" {
+		network = "ip6"
+	}
+	key := network + "|" + address
+
+	p.resolvedMu.Lock()
+	pinned, ok := p.resolved[key]
+	p.resolvedMu.Unlock()
+	if ok {
+		return pinned, nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIP(lookupCtx, network, host)
+	if err != nil {
+		return "", fmt.Errorf("doq could not resolve %s for %s: %w", host, serverInfo.IPFamily, err)
+	}
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("doq could not resolve %s: no %s address", host, network)
+	}
+	pinned = net.JoinHostPort(addresses[0].String(), port)
+
+	p.resolvedMu.Lock()
+	if p.resolved == nil {
+		p.resolved = make(map[string]string)
+	}
+	if existing, ok := p.resolved[key]; ok {
+		pinned = existing
+	} else {
+		p.resolved[key] = pinned
+	}
+	p.resolvedMu.Unlock()
+	return pinned, nil
 }
 
 // performDoQQuery performs a DNS query over QUIC (DoQ).
@@ -355,6 +473,7 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain string, qType uint16, timeout time.Duration, pool *quicConnectionPool) QueryResult {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), qType)
+	msg.Id = 0
 	msg.SetEdns0(4096, true)
 
 	packedMsg, err := msg.Pack()
@@ -364,16 +483,26 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 
 	tlsConfig := &tls.Config{
 		NextProtos: []string{"doq"}, // ALPN for DoQ
-		ServerName: serverInfo.Hostname,
-		MinVersion: tls.VersionTLS12,
+		ServerName: authenticationName(serverInfo),
+		RootCAs:    serverInfo.TLSRootCAs,
+		MinVersion: tls.VersionTLS13,
 	}
 
-	startTime := time.Now()
+	// Hostname resolution for a forced family happens before the query
+	// timeout and clock start: it measures the system resolver, not the DoQ
+	// endpoint. The first address is pinned for the rest of the run so that
+	// every query reuses the same pooled session.
+	serverAddress, err := pool.resolveForFamily(ctx, serverInfo, timeout)
+	if err != nil {
+		return QueryResult{Error: err}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	startTime := time.Now()
 	// Get QUIC connection from pool
-	session, pooled, err := pool.getConnection(ctx, serverInfo.Address, tlsConfig)
+	session, pooled, err := pool.getConnection(ctx, serverAddress, tlsConfig, timeout)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to get connection for %s: %w", serverInfo.Address, err)}
 	}
@@ -381,7 +510,7 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	// Return pooled connection, or close temporary one.
 	defer func() {
 		if pooled {
-			pool.returnConnection(serverInfo.Address, session)
+			pool.returnConnection(serverAddress, session)
 			return
 		}
 		_ = session.CloseWithError(0, "temporary session complete")
@@ -393,6 +522,13 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		return QueryResult{Error: fmt.Errorf("doq failed to open stream: %w", err)}
 	}
 
+	defer stream.CancelRead(0)
+	defer stream.CancelWrite(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = stream.SetDeadline(deadline)
+	}
+	stopCancel := context.AfterFunc(ctx, func() { stream.CancelRead(0); stream.CancelWrite(0) })
+	defer stopCancel()
 	// Write query with length prefix
 	lenPrefix := []byte{byte(len(packedMsg) >> 8), byte(len(packedMsg))}
 	if _, err = stream.Write(append(lenPrefix, packedMsg...)); err != nil {
@@ -442,7 +578,7 @@ func (b *Benchmarker) performQuery(ctx context.Context, serverInfo config.Server
 	case config.DOT:
 		return performDoTQueryFunc(ctx, serverInfo, domain, qType, timeout)
 	case config.DOH:
-		httpClient := b.dohClients[serverInfo.Address]
+		httpClient := b.dohClients[serverInfo.String()]
 		return performDoHQueryFunc(ctx, serverInfo, domain, qType, timeout, httpClient)
 	case config.DOQ:
 		return performDoQQueryFunc(ctx, serverInfo, domain, qType, timeout, b.quicPool)
@@ -466,6 +602,7 @@ type queryJobResult struct {
 	result     QueryResult
 	queryType  analysis.QueryType // For latency jobs
 	checkType  string             // For specific checks
+	qType      uint16             // DNS record type that was queried
 	skipped    bool               // Job not attempted (or aborted) due to cancellation
 }
 
@@ -480,6 +617,29 @@ type Benchmarker struct {
 	dohClients     map[string]*http.Client // HTTP clients for DoH servers
 	quicPool       *quicConnectionPool
 	progress       *progressTracker
+	evidence       map[string]*checkEvidence // multi-probe check state per server
+}
+
+// checkEvidence accumulates probe results for checks that need more than one
+// query. Check results are processed on a single goroutine, in any order.
+type checkEvidence struct {
+	dnssecBogus   *QueryResult
+	dnssecControl *QueryResult
+	// rebinding holds the per-record-type probe state; it is combined across
+	// all servers in finalizeRebinding.
+	rebinding map[uint16]analysis.CheckState
+	// accuracy holds the per-record-type accuracy result.
+	accuracy map[uint16]*bool
+}
+
+func (b *Benchmarker) evidenceFor(serverKey string) *checkEvidence {
+	if b.evidence == nil {
+		b.evidence = map[string]*checkEvidence{}
+	}
+	if b.evidence[serverKey] == nil {
+		b.evidence[serverKey] = &checkEvidence{}
+	}
+	return b.evidence[serverKey]
 }
 
 // NewBenchmarker creates a new Benchmarker instance.
@@ -492,7 +652,7 @@ func NewBenchmarker(cfg *config.Config) *Benchmarker {
 	dohClients := make(map[string]*http.Client)
 	for _, server := range cfg.Servers {
 		if server.Protocol == config.DOH {
-			dohClients[server.Address] = &http.Client{Timeout: cfg.Timeout}
+			dohClients[server.String()] = newDoHClient(server, cfg.Timeout)
 		}
 	}
 
@@ -511,6 +671,9 @@ func (b *Benchmarker) Close() {
 		return
 	}
 	b.quicPool.shutdownPool()
+	for _, client := range b.dohClients {
+		client.CloseIdleConnections()
+	}
 }
 
 // Run performs the benchmark against the configured servers. Cancelling ctx
@@ -518,15 +681,20 @@ func (b *Benchmarker) Close() {
 // unattempted queries recorded as skipped.
 func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 	servers := b.Config.Servers
-
-	if b.ProgressWriter != nil {
-		_, _ = fmt.Fprint(b.ProgressWriter, "Warming up connections...")
-	}
-	b.prewarmConnections(ctx, servers)
+	b.Results = analysis.NewBenchmarkResults()
+	b.evidence = map[string]*checkEvidence{}
+	b.Results.Metadata.StartedAt = time.Now().UTC()
+	b.Results.Metadata.RequestedQueries = b.Config.NumQueries
+	defer func() {
+		b.Results.Metadata.Interrupted = ctx.Err() != nil
+		for _, r := range b.Results.Results {
+			b.Results.Metadata.Skipped += r.Skipped
+		}
+	}()
 
 	// Initialize Results map
 	for _, server := range servers {
-		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.String(), Protocol: server.Protocol.Label()}
+		b.Results.Results[server.String()] = &analysis.ServerResult{ServerAddress: server.AddressString(), Protocol: server.Protocol.Label(), Metadata: server.Metadata, Checks: initialCheckStates(b.Config, server)}
 	}
 
 	if b.ProgressWriter != nil {
@@ -536,7 +704,8 @@ func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 		defer b.progress.stop()
 	}
 
-	// Run Latency Benchmark
+	// Warm up, then run the latency benchmark
+	b.Results.Metadata.WarmupQueries = b.warmUp(ctx, servers)
 	b.runLatencyBenchmark(ctx, servers)
 
 	// Run Specific Checks Concurrently
@@ -545,25 +714,29 @@ func (b *Benchmarker) Run(ctx context.Context) *analysis.BenchmarkResults {
 	return b.Results
 }
 
-// prewarmConnections makes a dummy query to each DoH, DoT, and TCP server to establish
-// connections before running the benchmark. This prevents connection setup overhead from
-// biasing the cached query results. Connections are warmed concurrently (bounded by the
-// configured concurrency) so unreachable servers cost at most one timeout, not one each.
-func (b *Benchmarker) prewarmConnections(ctx context.Context, servers []config.ServerInfo) {
+// warmUp sends one unscored query for the cached domain to every endpoint and
+// returns how many were sent. Without it, the first cached sample of each
+// endpoint pays for the DoH/DoQ handshake (later samples reuse the connection)
+// and may also be the cache miss that fills the resolver cache, so the
+// transports with reusable connections would be inflated relative to UDP.
+// Warm-up queries go through the rate limiter like every other probe and are
+// reported in the run metadata rather than hidden.
+func (b *Benchmarker) warmUp(ctx context.Context, servers []config.ServerInfo) int {
+	if b.Config.NumQueries < 1 || len(servers) == 0 {
+		return 0
+	}
+	qType := dns.StringToType[strings.ToUpper(b.Config.QueryType)]
+	if qType == 0 {
+		qType = dns.TypeA
+	}
 	concurrency := b.Config.Concurrency
 	if concurrency <= 0 {
 		concurrency = 1
 	}
 	sem := make(chan struct{}, concurrency)
+	var sent atomic.Int64
 	var wg sync.WaitGroup
-
 	for _, server := range servers {
-		if ctx.Err() != nil {
-			break
-		}
-		if server.Protocol != config.DOH && server.Protocol != config.DOT && server.Protocol != config.TCP && server.Protocol != config.DOQ {
-			continue
-		}
 		wg.Add(1)
 		go func(s config.ServerInfo) {
 			defer wg.Done()
@@ -573,10 +746,18 @@ func (b *Benchmarker) prewarmConnections(ctx context.Context, servers []config.S
 			case <-ctx.Done():
 				return
 			}
-			_ = b.performQuery(ctx, s, "example.com", dns.TypeA, b.Config.Timeout)
+			if ctx.Err() != nil || b.Limiter.Wait(ctx) != nil {
+				return
+			}
+			sent.Add(1)
+			result := b.performQuery(ctx, s, b.Config.Domain, qType, b.Config.Timeout)
+			if result.Error != nil && b.Config.Verbose {
+				fmt.Fprintf(os.Stderr, "Warm-up query for %s failed (not scored): %v\n", s.String(), result.Error)
+			}
 		}(server)
 	}
 	wg.Wait()
+	return int(sent.Load())
 }
 
 // calculateLatencyQueryCounts determines the number of cached and uncached queries.
@@ -642,12 +823,28 @@ func (b *Benchmarker) runLatencyBenchmark(ctx context.Context, servers []config.
 
 	// Enqueue jobs round-robin across servers so an interrupted run still has
 	// samples for every server instead of exhausting the first server's queue.
+	//
+	// The corpus is a per-run list of name templates shared by every endpoint, so
+	// all endpoints get the same workload (identified by CorpusID). Each uncached
+	// template is made unique per endpoint by endpointQueryName; otherwise the
+	// first endpoint to ask would warm the cache shared by the provider's other
+	// endpoints (other transports and families) and their "uncached" samples
+	// would really be cache hits.
+	corpus := make([]string, totalLatencyJobsPerServer)
+	for i := range corpus {
+		corpus[i] = cachedDomain
+		if i >= numCached {
+			corpus[i] = generateUniqueDomain(nxdomainCheckDomainPrefix, "")
+		}
+	}
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%d\n%s", qType, strings.Join(corpus, "\n"))))
+	b.Results.Metadata.CorpusID = fmt.Sprintf("sha256:%x", hash)
 	for i := 0; i < totalLatencyJobsPerServer; i++ {
 		for _, server := range servers {
 			if i < numCached {
 				jobs <- queryJob{serverInfo: server, domain: cachedDomain, qType: qType, queryType: analysis.Cached}
 			} else {
-				uncachedDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, ".net.")
+				uncachedDomain := endpointQueryName(corpus[i], uncachedQuerySuffix, server)
 				jobs <- queryJob{serverInfo: server, domain: uncachedDomain, qType: qType, queryType: analysis.Uncached}
 			}
 		}
@@ -677,9 +874,35 @@ func (b *Benchmarker) processLatencyResult(res queryJobResult) {
 		return
 	}
 
+	policyResponse := false
+	if response := res.result.Response; response != nil {
+		if opt := response.IsEdns0(); opt != nil {
+			for _, option := range opt.Option {
+				if ede, ok := option.(*dns.EDNS0_EDE); ok {
+					serverResult.ExtendedDNSErrors = append(serverResult.ExtendedDNSErrors, ede.InfoCode)
+					if ede.InfoCode >= 15 && ede.InfoCode <= 18 {
+						policyResponse = true
+					}
+				}
+			}
+		}
+	}
+	if policyResponse {
+		serverResult.PolicyResponses++
+	}
 	// Record latency for any valid DNS response, regardless of rcode.
 	// NXDOMAIN is the expected response for uncached queries to random domains.
 	if res.result.Error == nil && res.result.Response != nil {
+		if res.result.Response.Truncated {
+			// Counted as a failed probe in its own category; Errors equals the sum
+			// of the timeout, transport, malformed and truncated counters.
+			serverResult.TruncatedResponses++
+			serverResult.Errors++
+			if b.Config.Verbose {
+				fmt.Fprintf(os.Stderr, "Latency query for %s (%s) was truncated; not scored\n", serverKey, res.queryType)
+			}
+			return
+		}
 		if isUnexpectedLatencyRcode(res.queryType, res.result.Response.Rcode) {
 			serverResult.DNSFailures++
 		}
@@ -719,29 +942,42 @@ func isUnexpectedLatencyRcode(queryType analysis.QueryType, rcode int) bool {
 // prepareCheckJobs creates a list of query jobs for the enabled checks.
 func (b *Benchmarker) prepareCheckJobs(servers []config.ServerInfo) []queryJob {
 	var checkJobsList []queryJob
+	dotcomTemplate := generateUniqueDomain(dotcomCheckPrefix, "")
+	nxDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, nxdomainCheckDomainSuffix)
 	for _, server := range servers {
 		if b.Config.CheckDNSSEC {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"})
+			checkJobsList = append(checkJobsList,
+				queryJob{serverInfo: server, domain: dnssecCheckDomain, qType: dns.TypeA, checkType: "dnssec"},
+				queryJob{serverInfo: server, domain: dnssecControlDomain, qType: dns.TypeA, checkType: "dnssec-control"})
 		}
 		if b.Config.CheckNXDOMAIN {
-			nxDomain := generateUniqueDomain(nxdomainCheckDomainPrefix, nxdomainCheckDomainSuffix)
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: nxDomain, qType: dns.TypeA, checkType: "nxdomain"})
+			for _, name := range []string{nxDomain, "second." + nxDomain} {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: name, qType: dns.TypeA, checkType: "nxdomain"})
+			}
 		}
-		if b.Config.CheckRebinding {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: rebindingCheckDomain, qType: dns.TypeA, checkType: "rebinding"})
+		if b.Config.CheckRebinding && b.Config.RebindingDomain != "" {
+			for _, qType := range rebindingProbeTypes {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.RebindingDomain, qType: qType, checkType: "rebinding"})
+			}
+		}
+		if b.Config.CheckFiltering {
+			for _, domain := range server.FilteringProbeDomains {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: domain, qType: dns.TypeA, checkType: "filtering"})
+			}
 		}
 		if b.Config.AccuracyCheckFile != "" {
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: dns.TypeA, checkType: "accuracy"})
+			for _, qType := range accuracyQueryTypes(b.Config.AccuracyCheckIP) {
+				checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: b.Config.AccuracyCheckDomain, qType: qType, checkType: "accuracy"})
+			}
 		}
 		if b.Config.CheckDotcom {
-			dotcomDomain := generateUniqueDomain(dotcomCheckPrefix, dotcomCheckSuffix)
-			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: dotcomDomain, qType: dns.TypeA, checkType: "dotcom"})
+			checkJobsList = append(checkJobsList, queryJob{serverInfo: server, domain: endpointQueryName(dotcomTemplate, dotcomCheckSuffix, server), qType: dns.TypeA, checkType: "dotcom"})
 		}
 	}
 	return checkJobsList
 }
 
-// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Dotcom checks.
+// runChecksConcurrently runs DNSSEC, NXDOMAIN, Rebinding, Accuracy, Filtering and Dotcom checks.
 func (b *Benchmarker) runChecksConcurrently(ctx context.Context, servers []config.ServerInfo) {
 	checkJobsList := b.prepareCheckJobs(servers)
 	if len(checkJobsList) == 0 {
@@ -779,6 +1015,7 @@ func (b *Benchmarker) runChecksConcurrently(ctx context.Context, servers []confi
 	for res := range resultsChan {
 		b.processCheckResult(res)
 	}
+	b.finalizeRebinding(servers)
 }
 
 // processCheckResult updates the benchmark results based on a single check job result.
@@ -789,8 +1026,12 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		return // Should not happen
 	}
 
-	// Skipped checks stay in their inconclusive (nil) state.
+	// Skipped checks stay in their inconclusive (nil) state. A skipped .com
+	// probe is recorded so that it does not make the server unrankable.
 	if res.skipped {
+		if res.checkType == "dotcom" {
+			serverResult.DotcomSkipped = true
+		}
 		return
 	}
 
@@ -798,20 +1039,79 @@ func (b *Benchmarker) processCheckResult(res queryJobResult) {
 		fmt.Fprintf(os.Stderr, "%s check error for %s: %v\n", strings.ToUpper(res.checkType), serverKey, res.result.Error)
 	}
 
+	if serverResult.Checks == nil {
+		serverResult.Checks = initialCheckStates(b.Config, res.serverInfo)
+	}
 	// Update results based on check type
 	switch res.checkType {
-	case "dnssec":
-		serverResult.SupportsDNSSEC = checkDNSSECValidation(res.result)
+	case "dnssec", "dnssec-control":
+		evidence := b.evidenceFor(serverKey)
+		result := res.result
+		if res.checkType == "dnssec" {
+			evidence.dnssecBogus = &result
+		} else {
+			evidence.dnssecControl = &result
+		}
+		serverResult.SupportsDNSSEC = combineDNSSECEvidence(evidence.dnssecBogus, evidence.dnssecControl)
+		serverResult.Checks["dnssec"] = analysis.StateFromBool(serverResult.SupportsDNSSEC, false)
 	case "nxdomain":
-		serverResult.HijacksNXDOMAIN = checkNXDOMAINHijack(res.result)
+		value := checkNXDOMAINHijack(res.result)
+		serverResult.NXDOMAINProbes++
+		if value == nil {
+			serverResult.NXDOMAINInconclusive = true
+		}
+		if value != nil && *value {
+			serverResult.HijacksNXDOMAIN = boolPtr(true)
+		} else if serverResult.HijacksNXDOMAIN == nil || !*serverResult.HijacksNXDOMAIN {
+			if serverResult.NXDOMAINProbes >= 2 && !serverResult.NXDOMAINInconclusive {
+				serverResult.HijacksNXDOMAIN = boolPtr(false)
+			}
+		}
+		serverResult.Checks["nxdomain"] = analysis.StateFromBool(serverResult.HijacksNXDOMAIN, true)
 	case "rebinding":
-		serverResult.BlocksRebinding = checkRebindingProtection(res.result)
+		// Combined across servers in finalizeRebinding.
+		evidence := b.evidenceFor(serverKey)
+		if evidence.rebinding == nil {
+			evidence.rebinding = map[uint16]analysis.CheckState{}
+		}
+		evidence.rebinding[res.qType] = analysis.StateFromBool(checkRebindingProtection(res.result), false)
+	case "filtering":
+		state := analysis.Inconclusive
+		if conclusiveResponse(res.result) && res.result.Response.Rcode == dns.RcodeSuccess && len(res.result.Response.Answer) > 0 {
+			state = analysis.Fail
+			for _, rr := range res.result.Response.Answer {
+				if a, ok := rr.(*dns.A); ok && a.A.IsUnspecified() {
+					state = analysis.Pass
+				}
+			}
+		}
+		serverResult.FilteringProbes++
+		serverResult.FilteringStates = append(serverResult.FilteringStates, state)
+		serverResult.Checks["filtering"] = combineProbeStates(serverResult.FilteringStates, len(res.serverInfo.FilteringProbeDomains))
 	case "accuracy":
-		serverResult.IsAccurate = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+		evidence := b.evidenceFor(serverKey)
+		if evidence.accuracy == nil {
+			evidence.accuracy = map[uint16]*bool{}
+		}
+		evidence.accuracy[res.qType] = checkResponseAccuracy(res.result, b.Config.AccuracyCheckIP)
+		serverResult.IsAccurate = combineAccuracyEvidence(evidence.accuracy)
+		serverResult.Checks["accuracy"] = analysis.StateFromBool(serverResult.IsAccurate, false)
 	case "dotcom":
-		if res.result.Error == nil && res.result.Response != nil {
-			latency := res.result.Latency
-			serverResult.DotcomLatency = &latency
+		// The probe name does not exist, so NXDOMAIN is the only correct answer.
+		// A fast SERVFAIL or REFUSED is a failure, not a latency sample. Errors
+		// and truncation stay inconclusive. Either way the server's score is
+		// +Inf (see analysis.computeScore) and it is not recommended (see
+		// output.findBestServer), so a failed probe cannot improve its standing
+		// by dropping out of the score. Only a probe that was never sent
+		// (skipped above) is left out of the score.
+		if conclusiveResponse(res.result) {
+			if res.result.Response.Rcode == dns.RcodeNameError {
+				latency := res.result.Latency
+				serverResult.DotcomLatency = &latency
+				serverResult.Checks["dotcom"] = analysis.Pass
+			} else {
+				serverResult.Checks["dotcom"] = analysis.Fail
+			}
 		}
 	}
 }
@@ -833,6 +1133,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 		serverInfo: job.serverInfo,
 		queryType:  job.queryType,
 		checkType:  job.checkType,
+		qType:      job.qType,
 		skipped:    true,
 	}
 
@@ -850,6 +1151,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 			},
 			queryType: job.queryType,
 			checkType: job.checkType,
+			qType:     job.qType,
 		}
 	}
 	queryResult := b.performQuery(ctx, job.serverInfo, job.domain, job.qType, b.Config.Timeout)
@@ -862,6 +1164,7 @@ func (b *Benchmarker) executeJob(ctx context.Context, job queryJob) queryJobResu
 		result:     queryResult,
 		queryType:  job.queryType,
 		checkType:  job.checkType,
+		qType:      job.qType,
 	}
 }
 
@@ -874,6 +1177,15 @@ func generateUniqueDomain(prefix, suffix string) string {
 	} // Fallback
 	uniquePart := hex.EncodeToString(randomBytes)
 	return fmt.Sprintf("%s%s%s", prefix, uniquePart, suffix)
+}
+
+// endpointQueryName derives an endpoint-specific name from a shared corpus
+// template. The endpoint token is appended to the same label rather than added
+// as a subdomain: a subdomain of a shared non-existent name could be answered
+// from a cached NXDOMAIN for its parent (RFC 8020), defeating the uniqueness.
+func endpointQueryName(template, suffix string, server config.ServerInfo) string {
+	sum := sha256.Sum256([]byte(server.String()))
+	return fmt.Sprintf("%s-%x%s", template, sum[:4], suffix)
 }
 
 func boolPtr(value bool) *bool {
@@ -959,16 +1271,32 @@ func classifyQueryResult(result QueryResult) QueryOutcome {
 
 // --- Check Helper Functions ---
 
-// checkDNSSECValidation checks whether the resolver performs DNSSEC validation.
-// The check query uses a deliberately broken DNSSEC domain, so validating resolvers
-// should return SERVFAIL while non-validating resolvers typically return NOERROR.
+// conclusiveResponse reports whether a check result can be used as evidence.
+// Errors, missing responses and truncated (TC) replies are inconclusive: a
+// truncated answer section cannot prove the absence of records.
+func conclusiveResponse(result QueryResult) bool {
+	return result.Error == nil && result.Response != nil && !result.Response.Truncated
+}
+
+// checkDNSSECValidation classifies the answer for the deliberately broken
+// DNSSEC domain on its own. NOERROR means the bogus data was accepted (false).
+// SERVFAIL with a DNSSEC-related Extended DNS Error (codes 6-12) proves a
+// validation failure (true). Plain SERVFAIL is ambiguous by itself and returns
+// nil; combineDNSSECEvidence resolves it with the signed control query.
 func checkDNSSECValidation(result QueryResult) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	switch result.Response.Rcode {
 	case dns.RcodeServerFailure:
-		return boolPtr(true)
+		if opt := result.Response.IsEdns0(); opt != nil {
+			for _, option := range opt.Option {
+				if ede, ok := option.(*dns.EDNS0_EDE); ok && ede.InfoCode >= 6 && ede.InfoCode <= 12 {
+					return boolPtr(true)
+				}
+			}
+		}
+		return nil
 	case dns.RcodeSuccess:
 		return boolPtr(false)
 	default:
@@ -976,11 +1304,32 @@ func checkDNSSECValidation(result QueryResult) *bool {
 	}
 }
 
+// combineDNSSECEvidence merges the bogus-domain and signed-control probes. A
+// plain SERVFAIL for the bogus domain counts as validation only when the same
+// resolver answers the correctly signed control domain with NOERROR and at
+// least one record, ruling out a resolver that fails every query. Either probe
+// may be missing while results are still arriving.
+func combineDNSSECEvidence(bogus, control *QueryResult) *bool {
+	if bogus == nil {
+		return nil
+	}
+	if verdict := checkDNSSECValidation(*bogus); verdict != nil {
+		return verdict
+	}
+	if !conclusiveResponse(*bogus) || bogus.Response.Rcode != dns.RcodeServerFailure {
+		return nil
+	}
+	if control == nil || !conclusiveResponse(*control) || control.Response.Rcode != dns.RcodeSuccess || len(control.Response.Answer) == 0 {
+		return nil
+	}
+	return boolPtr(true)
+}
+
 // checkNXDOMAINHijack checks for NXDOMAIN hijacking.
 // It determines if a server returns a NOERROR response with records for a deliberately non-existent domain,
 // which is indicative of hijacking.
 func checkNXDOMAINHijack(result QueryResult) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	rcode := result.Response.Rcode
@@ -993,56 +1342,177 @@ func checkNXDOMAINHijack(result QueryResult) *bool {
 	return nil // Inconclusive (SERVFAIL, REFUSED, or NOERROR with empty answers)
 }
 
-// checkRebindingProtection checks for DNS rebinding protection.
-// It queries a domain known to trigger rebinding attempts and expects either an error or no answer.
-// A successful response with answers indicates lack of rebinding protection.
+// checkRebindingProtection classifies one rebinding probe. The controlled
+// domain must resolve to a private address, so a private, loopback or
+// link-local address in the answer means the resolver passed the rebinding
+// answer through (false). NOERROR without address records is how rebinding
+// filters strip private answers (true), but it is only a candidate pass: a
+// lapsed or misconfigured test domain answers the same way, so
+// finalizeRebinding accepts it only when another probe in the run shows the
+// domain really serves a private record. Public-only answers, NXDOMAIN and
+// REFUSED are inconclusive: they come from a misconfigured or mistyped domain
+// or a resolver that refuses the client, not from rebinding protection.
 func checkRebindingProtection(result QueryResult) *bool {
-	if result.Error != nil {
+	if !conclusiveResponse(result) || result.Response.Rcode != dns.RcodeSuccess {
 		return nil
 	}
-	if result.Response == nil {
-		return nil
-	}
-	if result.Response.Rcode == dns.RcodeSuccess && len(result.Response.Answer) > 0 {
-		return boolPtr(false) // Received NOERROR with answers - vulnerable to rebinding
-	}
-	if result.Response.Rcode != dns.RcodeSuccess {
-		switch result.Response.Rcode {
-		case dns.RcodeRefused, dns.RcodeNameError:
-			return boolPtr(true)
+	sawAddress := false
+	for _, rr := range result.Response.Answer {
+		var address net.IP
+		switch record := rr.(type) {
+		case *dns.A:
+			address = record.A
+		case *dns.AAAA:
+			address = record.AAAA
 		default:
-			return nil
+			continue
+		}
+		sawAddress = true
+		if address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() {
+			return boolPtr(false) // Private answer passed through: vulnerable to rebinding
 		}
 	}
-	return boolPtr(true) // NOERROR without answers
+	if sawAddress {
+		return nil // Only public addresses: the test domain is not a rebinding domain
+	}
+	return boolPtr(true) // NOERROR without address records
 }
 
-// checkResponseAccuracy checks if the DNS response is accurate by comparing the answer to an expected IP.
-// It verifies that at least one A record in the answer matches the expected IP address.
+// rebindingProbeTypes are the record types queried for the rebinding domain.
+var rebindingProbeTypes = []uint16{dns.TypeA, dns.TypeAAAA}
+
+// finalizeRebinding combines the rebinding probes of every server once all
+// check results are in. A record type counts only when some server in the run
+// passed a private answer of that type through, which proves the test domain
+// serves one; without that control, a stripped answer from a lapsed domain or
+// a domain without that record type would read as protection. Servers fail
+// when any counted probe passed the answer through, pass when every counted
+// probe was stripped, and are inconclusive otherwise, including when no server
+// passed the answer through at all.
+func (b *Benchmarker) finalizeRebinding(servers []config.ServerInfo) {
+	if !b.Config.CheckRebinding || b.Config.RebindingDomain == "" {
+		return
+	}
+	var controlled []uint16
+	for _, qType := range rebindingProbeTypes {
+		for _, server := range servers {
+			if b.evidenceFor(server.String()).rebinding[qType] == analysis.Fail {
+				controlled = append(controlled, qType)
+				break
+			}
+		}
+	}
+	for _, server := range servers {
+		serverResult, ok := b.Results.Results[server.String()]
+		if !ok {
+			continue
+		}
+		state := analysis.Inconclusive
+		if len(controlled) > 0 {
+			evidence := b.evidenceFor(server.String())
+			states := make([]analysis.CheckState, 0, len(controlled))
+			for _, qType := range controlled {
+				if probe, ok := evidence.rebinding[qType]; ok {
+					states = append(states, probe)
+				}
+			}
+			state = combineProbeStates(states, len(controlled))
+		}
+		if serverResult.Checks == nil {
+			serverResult.Checks = initialCheckStates(b.Config, server)
+		}
+		serverResult.BlocksRebinding = boolFromState(state)
+		serverResult.Checks["rebinding"] = state
+	}
+}
+
+// accuracyQueryTypes returns the record types needed to observe every expected
+// address: A when any expected address is IPv4, AAAA when any is IPv6. An
+// IPv4-only list keeps the historical single A query. Unparsable entries are
+// ignored here; checkResponseAccuracy treats them as inconclusive.
+func accuracyQueryTypes(expectedIP string) []uint16 {
+	var hasV4, hasV6 bool
+	for _, value := range strings.Split(expectedIP, ",") {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		switch {
+		case ip == nil:
+		case ip.To4() != nil:
+			hasV4 = true
+		default:
+			hasV6 = true
+		}
+	}
+	var types []uint16
+	if hasV4 || !hasV6 {
+		types = append(types, dns.TypeA)
+	}
+	if hasV6 {
+		types = append(types, dns.TypeAAAA)
+	}
+	return types
+}
+
+// combineAccuracyEvidence merges per-record-type accuracy results. A match on
+// any record type is accurate, matching the any-address semantics of the
+// accuracy file; otherwise any mismatch is inaccurate, and with no conclusive
+// probe the result is nil (inconclusive).
+func combineAccuracyEvidence(results map[uint16]*bool) *bool {
+	var mismatch bool
+	for _, value := range results {
+		if value == nil {
+			continue
+		}
+		if *value {
+			return boolPtr(true)
+		}
+		mismatch = true
+	}
+	if mismatch {
+		return boolPtr(false)
+	}
+	return nil
+}
+
+// checkResponseAccuracy reports whether any A or AAAA answer matches one of the
+// comma-separated IPs in expectedIP. It returns nil (inconclusive) when the
+// response is unusable, the rcode is not NOERROR, expectedIP contains an
+// unparsable address, or the answer holds no address records.
 func checkResponseAccuracy(result QueryResult, expectedIP string) *bool {
-	if result.Error != nil || result.Response == nil {
+	if !conclusiveResponse(result) {
 		return nil
 	}
 	if result.Response.Rcode != dns.RcodeSuccess {
 		return nil
 	}
-	expected := net.ParseIP(expectedIP)
-	if expected == nil {
-		return nil
+	expected := []net.IP{}
+	for _, value := range strings.Split(expectedIP, ",") {
+		ip := net.ParseIP(value)
+		if ip == nil {
+			return nil
+		}
+		expected = append(expected, ip)
 	}
-	// TODO: Handle multiple expected IPs if accuracy file format allows it.
-	foundARecord := false
+	found := false
 	for _, rr := range result.Response.Answer {
-		if aRecord, ok := rr.(*dns.A); ok {
-			foundARecord = true
-			if aRecord.A.Equal(expected) {
-				return boolPtr(true) // Found matching A record
+		var address net.IP
+		switch record := rr.(type) {
+		case *dns.A:
+			address = record.A
+		case *dns.AAAA:
+			address = record.AAAA
+		}
+		if address == nil {
+			continue
+		}
+		found = true
+		for _, ip := range expected {
+			if address.Equal(ip) {
+				return boolPtr(true)
 			}
 		}
-		// TODO: Add check for AAAA records if needed/specified.
 	}
-	if !foundARecord {
+	if !found {
 		return nil
 	}
-	return boolPtr(false) // A records present, but no matching IP found
+	return boolPtr(false)
 }

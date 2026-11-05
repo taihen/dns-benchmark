@@ -2,7 +2,10 @@ package analysis
 
 import (
 	"math"
+	"strings"
 	"time"
+
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
 // QueryType indicates the type of benchmark query (cached or uncached).
@@ -31,13 +34,34 @@ const (
 	weightDotcom   = 0.25
 )
 
-// Holds benchmark results and metrics for a single DNS server.
+// ServerResult holds benchmark results and metrics for a single DNS server.
 type ServerResult struct {
-	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://1.1.1.1:853)
+	catalog.Metadata
+	// Checks holds the state of each check keyed by name ("dnssec",
+	// "nxdomain", "rebinding", "accuracy", "filtering", "dotcom").
+	Checks map[string]CheckState
+	// TruncatedResponses counts replies with the TC bit set; a truncated
+	// latency reply counts as a failed query.
+	TruncatedResponses int
+	// NXDOMAINProbes counts NXDOMAIN hijack probes answered so far.
+	NXDOMAINProbes int
+	// NXDOMAINInconclusive is set when any NXDOMAIN probe lacked a usable answer.
+	NXDOMAINInconclusive bool
+	// FilteringProbes counts filtering probes answered so far.
+	FilteringProbes int
+	// FilteringStates holds the outcome of each filtering probe.
+	FilteringStates []CheckState
+	// ExtendedDNSErrors lists every Extended DNS Error info code (RFC 8914)
+	// seen in this server's replies.
+	ExtendedDNSErrors []uint16
+	// PolicyResponses counts replies carrying a policy Extended DNS Error:
+	// 15 Blocked, 16 Censored, 17 Filtered or 18 Prohibited.
+	PolicyResponses    int
+	ServerAddress      string // Includes protocol prefix where applicable (e.g., tls://one.one.one.one:853)
 	Protocol           string // Friendly protocol label (e.g., UDP, TCP, DoT, DoH, DoQ)
 	CachedLatencies    []time.Duration
 	UncachedLatencies  []time.Duration
-	Errors             int // Latency probes that failed before a structurally valid DNS response was received
+	Errors             int // Latency probes without a complete, structurally valid response
 	TotalQueries       int // Total number of latency queries scheduled
 	Skipped            int // Latency queries skipped due to cancellation (not attempted)
 	TimeoutErrors      int
@@ -51,6 +75,10 @@ type ServerResult struct {
 	BlocksRebinding *bool
 	IsAccurate      *bool
 	DotcomLatency   *time.Duration
+	// DotcomSkipped records that the .com probe was never sent because the
+	// run was cancelled. The check stays Inconclusive, but computeScore leaves
+	// it out instead of making the server unrankable.
+	DotcomSkipped bool
 
 	// Calculated Metrics
 	AvgCachedLatency      time.Duration
@@ -63,8 +91,8 @@ type ServerResult struct {
 
 // BenchmarkResults holds the results for all tested servers.
 type BenchmarkResults struct {
-	Results map[string]*ServerResult // Map key is ServerResult.ServerAddress
-	// TODO: Add overall benchmark metadata (e.g., start/end time, total errors across all types).
+	Metadata RunMetadata
+	Results  map[string]*ServerResult // Map key is config.ServerInfo.String(), unique per endpoint
 }
 
 // NewBenchmarkResults creates an initialized BenchmarkResults map.
@@ -157,8 +185,18 @@ func durationMs(d time.Duration) float64 {
 // renormalizing over whichever metrics have data, then divides by the effective
 // reliability (probe success rate minus the wrong-rcode DNS-failure rate).
 // It returns math.Inf(1) when the server cannot be ranked: no latency samples,
-// no queries attempted, or zero effective reliability.
+// no queries attempted, zero effective reliability, or an enabled .com check
+// that was sent and did not pass. Renormalising over the remaining weights in
+// that last case would let a server whose .com probe failed or timed out
+// outscore one that answered it slowly. A probe that was never sent because
+// the run was cancelled (DotcomSkipped) says nothing about the server, so it
+// is left out of the score as if -dotcom were off.
 func computeScore(sr *ServerResult) float64 {
+	if state, ok := sr.Checks["dotcom"]; ok && state != NotApplicable && state != Pass {
+		if state != Inconclusive || !sr.DotcomSkipped {
+			return math.Inf(1)
+		}
+	}
 	var weightedSum, weightTotal float64
 	if len(sr.UncachedLatencies) > 0 {
 		weightedSum += weightUncached * durationMs(sr.AvgUncachedLatency)
@@ -198,4 +236,61 @@ func (br *BenchmarkResults) Analyze() {
 	for _, serverResult := range br.Results {
 		serverResult.CalculateMetrics()
 	}
+}
+
+// CheckState distinguishes a failed probe from missing evidence.
+type CheckState string
+
+const (
+	// Pass means the probe returned conclusive evidence of the desired behaviour.
+	Pass CheckState = "pass"
+	// Fail means the probe returned conclusive evidence of the undesired behaviour.
+	Fail CheckState = "fail"
+	// Inconclusive means the check ran but no conclusive response was obtained.
+	Inconclusive CheckState = "inconclusive"
+	// NotApplicable means the check was not run or does not apply to this endpoint.
+	NotApplicable CheckState = "not_applicable"
+)
+
+// StateFromBool translates compatibility fields into explicit check states.
+func StateFromBool(value *bool, invert bool) CheckState {
+	if value == nil {
+		return Inconclusive
+	}
+	if *value != invert {
+		return Pass
+	}
+	return Fail
+}
+
+// RunMetadata describes the workload and completion state of a benchmark.
+type RunMetadata struct {
+	StartedAt        time.Time `json:"startedAt"`
+	CorpusID         string    `json:"queryCorpusId"`
+	RequestedQueries int       `json:"requestedQueryCount"`
+	Skipped          int       `json:"skippedCount"`
+	WarmupQueries    int       `json:"warmupQueryCount"`
+	Interrupted      bool      `json:"interrupted"`
+}
+
+// ComparisonGroup identifies catalogue endpoints with matching filtering
+// policy, roles, ECS, transport and IP family. It is empty for endpoints
+// without catalogue metadata (-f entries and system DNS), which have no
+// documented policy.
+func (sr *ServerResult) ComparisonGroup() string {
+	if sr.CatalogVersion == "" {
+		return ""
+	}
+	return strings.Join([]string{sr.FilteringPolicy, strings.Join(sr.Roles, "+"), sr.ECS, sr.Protocol, sr.IPFamily}, " / ")
+}
+
+// RankingGroup identifies endpoints whose latency is directly comparable:
+// the same transport over the same IP family. Rankings span providers and
+// policies within a RankingGroup, with policy shown alongside each result.
+func (sr *ServerResult) RankingGroup() string {
+	family := sr.IPFamily
+	if family == "" {
+		family = "auto"
+	}
+	return sr.Protocol + " / " + family
 }

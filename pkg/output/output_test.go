@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/taihen/dns-benchmark/pkg/analysis"
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"github.com/taihen/dns-benchmark/pkg/config"
 )
 
@@ -289,7 +292,7 @@ func TestPrintConsoleResults(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	PrintConsoleResults(&buf, results, cfg)
+	require.NoError(t, PrintConsoleResults(&buf, results, cfg))
 	output := buf.String()
 
 	// Basic checks - presence of headers and server addresses
@@ -334,18 +337,17 @@ func TestPrintConsoleResults(t *testing.T) {
 	// assert.Contains(t, output, "N/A")     // StdDev Uncached (n=1) - This might appear multiple times, check specific column context if needed
 	assert.Contains(t, output, "66.7%") // Reliability
 	// assert.Contains(t, output, "N/A")     // .com Latency
-	assert.Contains(t, output, "Yes") // DNSSEC
-	// assert.Contains(t, output, "N/A")     // NXDOMAIN
-	assert.Contains(t, output, "Allows")   // Rebinding
-	assert.Contains(t, output, "Mismatch") // Accuracy
+	assert.Contains(t, output, "Yes")          // DNSSEC
+	assert.Contains(t, output, "Inconclusive") // NXDOMAIN enabled but no conclusive probe, not "N/A"
+	assert.Contains(t, output, "Allows")       // Rebinding
+	assert.Contains(t, output, "Mismatch")     // Accuracy
 
-	// Check that summary is NOT printed because the writer is not os.Stdout
-	assert.NotContains(t, output, "--- Conclusion ---")
-	assert.NotContains(t, output, "Fastest reliable server")
-	assert.NotContains(t, output, "Warning (8.8.8.8:53):") // Specific warnings shouldn't be there either
-	assert.NotContains(t, output, "Warning (tls://9.9.9.9:853):")
-
-	// We cannot easily test the os.Stdout case here, so we only test the buffer case.
+	// The summary goes to any writer, so -format console -o FILE keeps the
+	// recommendation and the inconclusive warnings.
+	assert.Contains(t, output, "--- Conclusion ---")
+	assert.Contains(t, output, "Recommended server: 1.1.1.1:53")
+	assert.Contains(t, output, "Warning (8.8.8.8:53): Returned inaccurate results")
+	assert.Contains(t, output, "Warning (tls://9.9.9.9:853): Accuracy check for test.local. was inconclusive.")
 }
 
 func TestWriteCSVResults(t *testing.T) {
@@ -383,6 +385,7 @@ func TestWriteCSVResults(t *testing.T) {
 		"DotcomLatency(ms)",
 		"SupportsDNSSEC", "HijacksNXDOMAIN", "BlocksRebinding", "IsAccurate",
 	}
+	expectedHeader = append(expectedHeader, "Provider", "Profile", "Roles", "EndpointID", "IPFamily", "Transport", "TLSServerName", "CatalogVersion", "FilteringPolicy", "ComparisonGroup", "TruncatedResponses", "PolicyResponses", "DNSSECState", "NXDOMAINState", "RebindingState", "AccuracyState", "FilteringState", "DotcomState", "SkippedQueries")
 	assert.Equal(t, expectedHeader, records[0])
 
 	// Check Data Rows (order is sorted: 1.1.1.1, 8.8.8.8, 9.9.9.9)
@@ -470,10 +473,13 @@ func TestWriteJSONResults(t *testing.T) {
 	err := WriteJSONResults(&buf, results, cfg)
 	require.NoError(t, err)
 
+	var report JSONReport
 	var jsonOutput []JSONServerResult
-	err = json.Unmarshal(buf.Bytes(), &jsonOutput)
+	err = json.Unmarshal(buf.Bytes(), &report)
 	require.NoError(t, err)
 
+	jsonOutput = report.Results
+	assert.Equal(t, "2", report.SchemaVersion)
 	require.Len(t, jsonOutput, 3)
 
 	// Check order (sorted)
@@ -625,8 +631,128 @@ func TestSortServerResultsTieBreakByAddress(t *testing.T) {
 	assert.Equal(t, "b", results[1].ServerAddress)
 }
 
+// TestSortServerResultsCustomFirstThenGroups pins the documented row order:
+// custom and system endpoints first by score, then catalogue endpoints grouped
+// by transport and IP family, each group sorted by score.
+func TestSortServerResultsCustomFirstThenGroups(t *testing.T) {
+	catalogued := func(id, protocol, family string, score float64) *analysis.ServerResult {
+		return &analysis.ServerResult{ServerAddress: id, Protocol: protocol, Score: score, Metadata: catalog.Metadata{EndpointID: id, IPFamily: family, CatalogVersion: "test"}}
+	}
+	results := []*analysis.ServerResult{
+		catalogued("udp4-fast", "UDP", "ipv4", 1),
+		catalogued("dot4-slow", "DoT", "ipv4", 40),
+		{ServerAddress: "custom-slow", Protocol: "UDP", Score: 90},
+		catalogued("doh4-slow", "DoH", "ipv4", 30),
+		catalogued("dot4-fast", "DoT", "ipv4", 5),
+		{ServerAddress: "custom-fast", Protocol: "UDP", Score: 20},
+		catalogued("doh4-fast", "DoH", "ipv4", 10),
+	}
+
+	sortServerResults(results)
+
+	got := make([]string, len(results))
+	for i, res := range results {
+		got[i] = res.ServerAddress
+	}
+	assert.Equal(t, []string{"custom-fast", "custom-slow", "doh4-fast", "doh4-slow", "dot4-fast", "dot4-slow", "udp4-fast"}, got)
+}
+
+// TestInconclusiveNotePrintedOnce checks that the hint explaining inconclusive
+// checks appears once per summary, not once per ranking group, and only when
+// -v is off.
+func TestInconclusiveNotePrintedOnce(t *testing.T) {
+	inconclusive := map[string]analysis.CheckState{"dnssec": analysis.Inconclusive}
+	results := []*analysis.ServerResult{
+		{ServerAddress: "doh", Protocol: "DoH", Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{EndpointID: "doh", IPFamily: "ipv4", CatalogVersion: "test"}},
+		{ServerAddress: "dot", Protocol: "DoT", Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{EndpointID: "dot", IPFamily: "ipv4", CatalogVersion: "test"}},
+		{ServerAddress: "custom", Protocol: "UDP", Score: 10, Checks: inconclusive},
+	}
+	tests := []struct {
+		name      string
+		verbose   bool
+		wantNotes int
+	}{
+		{"quiet run explains inconclusive once", false, 1},
+		{"verbose run already shows details", true, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printSummary(&buf, results, &config.Config{CheckDNSSEC: true, Verbose: tt.verbose})
+			assert.Equal(t, 3, strings.Count(buf.String(), "DNSSEC check was inconclusive."))
+			assert.Equal(t, tt.wantNotes, strings.Count(buf.String(), "run with -v"))
+		})
+	}
+}
+
+// TestSortServerResultsTieBreakByEndpointID checks that endpoints sharing a
+// group, score and serverAddress (possible for IPv4 and IPv6 catalogue
+// endpoints) are ordered by endpoint ID, so output order is deterministic.
+func TestSortServerResultsTieBreakByEndpointID(t *testing.T) {
+	results := []*analysis.ServerResult{
+		{ServerAddress: "tls://one.one.one.one:853", Score: 10.0, Metadata: catalog.Metadata{EndpointID: "cf-b"}},
+		{ServerAddress: "tls://one.one.one.one:853", Score: 10.0, Metadata: catalog.Metadata{EndpointID: "cf-a"}},
+	}
+	sortServerResults(results)
+	assert.Equal(t, "cf-a", results[0].EndpointID)
+	assert.Equal(t, "cf-b", results[1].EndpointID)
+}
+
+// TestCheckStateColumnsAndJSONChecks pins each check state to its own CSV
+// column and JSON checks key. The two results use different state permutations
+// so swapping any two columns or keys changes at least one value.
+func TestCheckStateColumnsAndJSONChecks(t *testing.T) {
+	pass, fail, inconclusive, na := analysis.Pass, analysis.Fail, analysis.Inconclusive, analysis.NotApplicable
+	states := []map[string]analysis.CheckState{
+		{"dnssec": pass, "nxdomain": fail, "rebinding": inconclusive, "accuracy": na, "filtering": pass, "dotcom": fail},
+		{"dnssec": fail, "nxdomain": pass, "rebinding": na, "accuracy": inconclusive, "filtering": inconclusive, "dotcom": na},
+	}
+	columns := map[string]string{
+		"DNSSECState": "dnssec", "NXDOMAINState": "nxdomain", "RebindingState": "rebinding",
+		"AccuracyState": "accuracy", "FilteringState": "filtering", "DotcomState": "dotcom",
+	}
+	results := analysis.NewBenchmarkResults()
+	for i, checks := range states {
+		address := fmt.Sprintf("server-%d:53", i)
+		results.Results[address] = &analysis.ServerResult{ServerAddress: address, Protocol: "UDP", Score: float64(i + 1), Checks: checks}
+	}
+	cfg := &config.Config{}
+
+	var csvBuf bytes.Buffer
+	require.NoError(t, WriteCSVResults(&csvBuf, results, cfg))
+	records, err := csv.NewReader(&csvBuf).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 1+len(states))
+	index := map[string]int{}
+	for i, name := range records[0] {
+		index[name] = i
+	}
+	for row, checks := range states {
+		for column, check := range columns {
+			require.Contains(t, index, column)
+			assert.Equal(t, string(checks[check]), records[row+1][index[column]], "row %d column %s", row, column)
+		}
+	}
+
+	var jsonBuf bytes.Buffer
+	require.NoError(t, WriteJSONResults(&jsonBuf, results, cfg))
+	var report struct {
+		Results []struct {
+			ServerAddress string                         `json:"serverAddress"`
+			Checks        map[string]analysis.CheckState `json:"checks"`
+		} `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBuf.Bytes(), &report))
+	require.Len(t, report.Results, len(states))
+	for i, r := range report.Results {
+		assert.Equal(t, fmt.Sprintf("server-%d:53", i), r.ServerAddress)
+		assert.Equal(t, states[i], r.Checks)
+	}
+}
+
 func TestFindBestServer(t *testing.T) {
 	bp := func(b bool) *bool { return &b }
+	slowDotcom := 80 * time.Millisecond
 
 	tests := []struct {
 		name     string
@@ -668,6 +794,17 @@ func TestFindBestServer(t *testing.T) {
 			},
 			cfg:      &config.Config{AccuracyCheckFile: "accuracy.txt"},
 			wantAddr: "",
+		},
+		{
+			// A failed .com probe drops out of Score, which would otherwise
+			// let it beat a server that answered the probe slowly.
+			name: ".com gate excludes server whose probe failed",
+			results: []*analysis.ServerResult{
+				{ServerAddress: "probe-failed", Score: 5.0},
+				{ServerAddress: "probe-slow", Score: 20.0, DotcomLatency: &slowDotcom},
+			},
+			cfg:      &config.Config{CheckDotcom: true},
+			wantAddr: "probe-slow",
 		},
 		{
 			name:     "no servers yields nil",
@@ -794,6 +931,10 @@ func TestPrintSummary(t *testing.T) {
 func TestPrintServerWarnings(t *testing.T) {
 	bTrue := true
 	bFalse := false
+	// The best server is identified by pointer, as findBestServer returns it.
+	soleBest := &analysis.ServerResult{ServerAddress: "best:53", Reliability: 100.0}
+	unreliableBest := &analysis.ServerResult{ServerAddress: "best:53", TotalQueries: 10, Reliability: 50.0}
+	hijackingBest := &analysis.ServerResult{ServerAddress: "best:53", Reliability: 100.0, HijacksNXDOMAIN: &bTrue}
 
 	tests := []struct {
 		name         string
@@ -894,6 +1035,13 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
+			name:       "best server alone has no others to report",
+			results:    []*analysis.ServerResult{soleBest},
+			bestServer: soleBest,
+			cfg:        &config.Config{},
+			wantAbsent: []string{"Other tested servers"},
+		},
+		{
 			name: "no issues besides best server",
 			results: []*analysis.ServerResult{
 				{
@@ -908,18 +1056,66 @@ func TestPrintServerWarnings(t *testing.T) {
 			},
 		},
 		{
-			name: "skip best server in warnings",
+			name:         "recommended server's own issues are reported",
+			results:      []*analysis.ServerResult{unreliableBest},
+			bestServer:   unreliableBest,
+			cfg:          &config.Config{},
+			wantContains: []string{"Warning (recommended, best:53): Low reliability (50.0%)"},
+		},
+		{
+			name:         "recommended server that hijacks NXDOMAIN is flagged",
+			results:      []*analysis.ServerResult{hijackingBest, {ServerAddress: "good:53", Reliability: 100.0}},
+			bestServer:   hijackingBest,
+			cfg:          &config.Config{CheckNXDOMAIN: true},
+			wantContains: []string{"Warning (recommended, best:53): Appears to hijack NXDOMAIN responses", "Other tested servers performed reliably"},
+		},
+		{
+			name:         "DNSSEC failure is warned",
+			results:      []*analysis.ServerResult{{ServerAddress: "novalidate:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dnssec": analysis.Fail}}},
+			bestServer:   soleBest,
+			cfg:          &config.Config{CheckDNSSEC: true},
+			wantContains: []string{"Warning (novalidate:53): Does not validate DNSSEC"},
+			wantAbsent:   []string{"without major issues"},
+		},
+		{
+			name:         "filtering failure is warned",
+			results:      []*analysis.ServerResult{{ServerAddress: "unfiltered:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"filtering": analysis.Fail}}},
+			bestServer:   soleBest,
+			cfg:          &config.Config{CheckFiltering: true},
+			wantContains: []string{"Warning (unfiltered:53): Did not block the documented filtering probe domains"},
+			wantAbsent:   []string{"without major issues"},
+		},
+		{
+			name: "failed and inconclusive .com probes are warned",
 			results: []*analysis.ServerResult{
-				{
-					ServerAddress: "best:53",
-					Reliability:   100.0,
-				},
+				{ServerAddress: "servfail:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dotcom": analysis.Fail}},
+				{ServerAddress: "timeout:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}},
 			},
-			bestServer: &analysis.ServerResult{ServerAddress: "best:53"},
-			cfg:        &config.Config{},
-			wantAbsent: []string{
-				"Warning (best:53)",
+			cfg: &config.Config{CheckDotcom: true},
+			wantContains: []string{
+				"Warning (servfail:53): .com probe did not return NXDOMAIN",
+				"Warning (timeout:53): .com probe was inconclusive",
 			},
+		},
+		{
+			name: "inconclusive checks are warned",
+			results: []*analysis.ServerResult{
+				soleBest,
+				{ServerAddress: "flaky:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{
+					"dnssec": analysis.Inconclusive, "nxdomain": analysis.Inconclusive,
+					"filtering": analysis.Inconclusive, "rebinding": analysis.Inconclusive,
+				}},
+				{ServerAddress: "open:53", Reliability: 100.0, Checks: map[string]analysis.CheckState{"rebinding": analysis.Fail}},
+			},
+			bestServer: soleBest,
+			cfg:        &config.Config{CheckDNSSEC: true, CheckNXDOMAIN: true, CheckFiltering: true, CheckRebinding: true, RebindingDomain: "rebind.example."},
+			wantContains: []string{
+				"Warning (flaky:53): DNSSEC check was inconclusive",
+				"Warning (flaky:53): NXDOMAIN check was inconclusive",
+				"Warning (flaky:53): Filtering check was inconclusive",
+				"Warning (flaky:53): Rebinding check was inconclusive",
+			},
+			wantAbsent: []string{"without major issues"},
 		},
 	}
 
@@ -935,6 +1131,159 @@ func TestPrintServerWarnings(t *testing.T) {
 			for _, absent := range tt.wantAbsent {
 				assert.NotContains(t, output, absent, "Expected output to not contain: %s", absent)
 			}
+		})
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestPrintConsoleResultsReportsWriteError(t *testing.T) {
+	err := PrintConsoleResults(failingWriter{}, createSampleResults(), &config.Config{})
+	assert.EqualError(t, err, "disk full")
+}
+
+// TestJSONSchemaV2Keys pins the schema v2 key names. It decodes into generic
+// maps, so renaming a json tag fails here even though a round-trip through
+// JSONReport would still pass.
+func TestJSONSchemaV2Keys(t *testing.T) {
+	cfg := &config.Config{CheckDNSSEC: true, CheckNXDOMAIN: true, CheckRebinding: true, AccuracyCheckFile: "dummy.txt", CheckDotcom: true}
+	var buf bytes.Buffer
+	require.NoError(t, WriteJSONResults(&buf, createSampleResults(), cfg))
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &report))
+	assert.Equal(t, JSONSchemaVersion, report["schemaVersion"])
+	assert.Equal(t, "2", JSONSchemaVersion)
+
+	metadata, ok := report["metadata"].(map[string]any)
+	require.True(t, ok)
+	for _, key := range []string{"startedAt", "queryCorpusId", "requestedQueryCount", "skippedCount", "warmupQueryCount", "interrupted"} {
+		assert.Contains(t, metadata, key)
+	}
+
+	results, ok := report["results"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, results)
+	for _, r := range results {
+		result := r.(map[string]any)
+		for _, key := range []string{
+			"serverAddress", "protocol", "provider", "profile", "roles", "endpointId", "ipFamily", "transport",
+			"tlsServerName", "catalogVersion", "filteringPolicy", "sourceURLs", "comparisonGroup", "checks",
+			"truncatedResponses", "extendedDnsErrors", "policyResponses", "reliabilityPct", "score",
+			"successfulCachedQueries", "successfulUncachedQueries", "timeoutErrors", "transportErrors",
+			"dnsFailures", "malformedResponses",
+		} {
+			assert.Contains(t, result, key)
+		}
+		for _, key := range []string{"roles", "sourceURLs", "extendedDnsErrors"} {
+			assert.IsType(t, []any{}, result[key], "%s must encode as an array, never null", key)
+		}
+		assert.IsType(t, map[string]any{}, result["checks"], "checks must encode as an object, never null")
+	}
+}
+
+// TestUnverifiedRebindingNotePrintedOnce checks that when no server passed the
+// rebinding domain's private answer through, the summary prints one run-level
+// note across all ranking groups instead of a warning per server.
+func TestUnverifiedRebindingNotePrintedOnce(t *testing.T) {
+	cfg := &config.Config{CheckRebinding: true, RebindingDomain: "rebind.example."}
+	inconclusive := map[string]analysis.CheckState{"rebinding": analysis.Inconclusive}
+	results := []*analysis.ServerResult{
+		{ServerAddress: "a:53", Protocol: "UDP", Reliability: 100, Score: 10, Checks: inconclusive, Metadata: catalog.Metadata{CatalogVersion: "v", Provider: "p1", Profile: "p1", Transport: "udp", IPFamily: "ipv4"}},
+		{ServerAddress: "b:853", Protocol: "DoT", Reliability: 100, Score: 20, Checks: inconclusive, Metadata: catalog.Metadata{CatalogVersion: "v", Provider: "p2", Profile: "p2", Transport: "dot", IPFamily: "ipv4"}},
+		{ServerAddress: "c:53", Protocol: "UDP", Reliability: 100, Score: 30, Checks: inconclusive},
+	}
+	var buf bytes.Buffer
+	printSummary(&buf, results, cfg)
+	output := buf.String()
+	assert.Equal(t, 1, strings.Count(output, "test domain is unverified"), output)
+	assert.NotContains(t, output, "Rebinding check was inconclusive")
+
+	results[0].Checks = map[string]analysis.CheckState{"rebinding": analysis.Fail}
+	buf.Reset()
+	printSummary(&buf, results, cfg)
+	assert.NotContains(t, buf.String(), "test domain is unverified")
+	assert.Contains(t, buf.String(), "Rebinding check was inconclusive")
+}
+
+func TestFormatDotcomKeepsFailAndInconclusiveDistinct(t *testing.T) {
+	latency := 15 * time.Millisecond
+	tests := []struct {
+		name string
+		res  analysis.ServerResult
+		want string
+	}{
+		{"passed shows latency", analysis.ServerResult{DotcomLatency: &latency, Checks: map[string]analysis.CheckState{"dotcom": analysis.Pass}}, "15.0 ms"},
+		{"wrong rcode shows fail", analysis.ServerResult{Checks: map[string]analysis.CheckState{"dotcom": analysis.Fail}}, "Fail"},
+		{"timeout shows inconclusive", analysis.ServerResult{Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}}, "Inconclusive"},
+		{"no state shows N/A", analysis.ServerResult{}, "N/A"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatDotcom(&tt.res))
+		})
+	}
+}
+
+func TestFormatCheckState(t *testing.T) {
+	tests := []struct {
+		state analysis.CheckState
+		want  string
+	}{
+		{analysis.Pass, "Pass"},
+		{analysis.Fail, "Fail"},
+		{analysis.Inconclusive, "Inconclusive"},
+		{analysis.NotApplicable, "N/A"},
+		{"", "N/A"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.state), func(t *testing.T) {
+			assert.Equal(t, tt.want, formatCheckState(tt.state))
+		})
+	}
+}
+
+func TestSkippedDotcomWarning(t *testing.T) {
+	tests := []struct {
+		name    string
+		skipped bool
+		want    string
+	}{
+		{"probe sent but inconclusive", false, ".com probe was inconclusive; excluded from recommendation."},
+		{"probe never sent", true, ".com probe was not sent before the run was interrupted; excluded from recommendation."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := &analysis.ServerResult{
+				ServerAddress: "1.1.1.1:53",
+				TotalQueries:  2,
+				Checks:        map[string]analysis.CheckState{"dotcom": analysis.Inconclusive},
+				DotcomSkipped: tt.skipped,
+			}
+			var buf bytes.Buffer
+			printServerWarnings(&buf, []*analysis.ServerResult{res}, nil, &config.Config{CheckDotcom: true})
+			assert.Contains(t, buf.String(), tt.want)
+		})
+	}
+}
+
+func TestFindBestServerSkipsUnsentDotcomProbe(t *testing.T) {
+	latency := 20 * time.Millisecond
+	skipped := &analysis.ServerResult{ServerAddress: "skipped", Score: 5, Checks: map[string]analysis.CheckState{"dotcom": analysis.Inconclusive}, DotcomSkipped: true}
+	passed := &analysis.ServerResult{ServerAddress: "passed", Score: 30, DotcomLatency: &latency, Checks: map[string]analysis.CheckState{"dotcom": analysis.Pass}}
+	tests := []struct {
+		name    string
+		results []*analysis.ServerResult
+		want    *analysis.ServerResult
+	}{
+		{"faster skipped server is not recommended", []*analysis.ServerResult{skipped, passed}, passed},
+		{"only skipped servers gives no recommendation", []*analysis.ServerResult{skipped}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Same(t, tt.want, findBestServer(tt.results, &config.Config{CheckDotcom: true}))
 		})
 	}
 }
