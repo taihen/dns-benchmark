@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -246,18 +247,27 @@ func (p *quicConnectionPool) getConnection(ctx context.Context, serverAddr strin
 	return session, true, nil
 }
 
-// returnConnection releases one query's use of a pooled connection.
-func (p *quicConnectionPool) returnConnection(serverAddr string, session *quic.Conn) {
+// returnConnection releases one query's use of a pooled connection, evicting
+// it immediately if the underlying QUIC session has already closed.
+func (p *quicConnectionPool) returnConnection(session *quic.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for _, conns := range p.connections {
-		for _, conn := range conns {
+	for key, conns := range p.connections {
+		for i, conn := range conns {
 			if conn.session == session {
 				if conn.streams > 0 {
 					conn.streams--
 				}
 				conn.lastUsed = time.Now()
+				if conn.streams == 0 && sessionClosed(conn.session) {
+					conns = slices.Delete(conns, i, i+1)
+					if len(conns) == 0 {
+						delete(p.connections, key)
+					} else {
+						p.connections[key] = conns
+					}
+				}
 				return
 			}
 		}
@@ -304,8 +314,9 @@ func performQueryWithClient(ctx context.Context, client DNSExchanger, serverAddr
 	latency := time.Since(startTime)
 
 	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return QueryResult{Error: fmt.Errorf("query timed out after %v", timeout)}
+		var netErr net.Error
+		if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, context.DeadlineExceeded) {
+			return QueryResult{Error: fmt.Errorf("query timed out after %v: %w", timeout, err)}
 		}
 		return QueryResult{Error: fmt.Errorf("query failed: %w", err)}
 	}
@@ -385,7 +396,10 @@ func performDoHQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 		}
 		return QueryResult{Error: fmt.Errorf("doh http request failed: %w", err)}
 	}
-	defer func() { _ = httpResp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(httpResp.Body, 4096))
+		_ = httpResp.Body.Close()
+	}()
 
 	if httpResp.StatusCode != http.StatusOK {
 		return QueryResult{Error: fmt.Errorf("doh query failed with status code %d", httpResp.StatusCode)}
@@ -510,7 +524,7 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	// Return pooled connection, or close temporary one.
 	defer func() {
 		if pooled {
-			pool.returnConnection(serverAddress, session)
+			pool.returnConnection(session)
 			return
 		}
 		_ = session.CloseWithError(0, "temporary session complete")
@@ -537,17 +551,14 @@ func performDoQQuery(ctx context.Context, serverInfo config.ServerInfo, domain s
 	}
 	_ = stream.Close() // Close write side
 
-	// Read response length prefix
+	// Read response length prefix (RFC 9250 2-octet length field: 0..65535)
 	lenBuf := make([]byte, 2)
 	if _, err = io.ReadFull(stream, lenBuf); err != nil {
 		return QueryResult{Error: fmt.Errorf("doq failed to read length prefix: %w", err)}
 	}
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
-
-	// Add protection against excessively large response lengths
-	const maxResponseSize = 64 * 1024 // 64KB limit
-	if respLen > maxResponseSize {
-		return QueryResult{Error: fmt.Errorf("doq response too large: %d bytes (max %d)", respLen, maxResponseSize)}
+	if respLen == 0 {
+		return QueryResult{Error: &ResponseValidationError{Reason: "doq response length is zero"}}
 	}
 
 	// Read response body
@@ -1216,7 +1227,10 @@ func validateResponseMatchesQuery(query *dns.Msg, response *dns.Msg) error {
 		return &ResponseValidationError{Reason: "dns question count mismatch"}
 	}
 	for i := range query.Question {
-		if response.Question[i] != query.Question[i] {
+		q, r := query.Question[i], response.Question[i]
+		// DNS names are case-insensitive (RFC 1035 / RFC 4343); resolvers may
+		// lowercase or apply 0x20 case encoding to the echoed question name.
+		if !strings.EqualFold(r.Name, q.Name) || r.Qtype != q.Qtype || r.Qclass != q.Qclass {
 			return &ResponseValidationError{Reason: "dns question mismatch"}
 		}
 	}

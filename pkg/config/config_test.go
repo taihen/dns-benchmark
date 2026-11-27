@@ -1,18 +1,16 @@
 package config
 
 import (
-	"bufio"
-	"github.com/taihen/dns-benchmark/pkg/catalog"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
 func TestParseServerString(t *testing.T) {
@@ -760,121 +758,74 @@ func TestResolvConfRegex(t *testing.T) {
 	}
 }
 
-// TestGetSystemDNSServers requires manipulating /etc/resolv.conf or mocking OS reads.
-// This is more involved and might be better suited for integration tests or skipped
-// if direct regex testing is deemed sufficient for unit tests.
-// We'll test its integration within LoadConfig tests later if possible.
-func TestGetSystemDNSServers_Unix(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping Unix /etc/resolv.conf test on Windows")
-	}
-
-	// Create a temporary resolv.conf
-	tempDir := t.TempDir()
-	const testResolvConfName = "resolv.conf" // Use a constant for the filename
-	resolvPath := filepath.Join(tempDir, testResolvConfName)
-
+func TestParseResolvConf(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		want        []string
-		wantErr     bool
-		errContains string
+		name    string
+		content string
+		want    []string
 	}{
 		{
 			name:    "valid servers",
 			content: "nameserver 1.1.1.1\nnameserver 8.8.8.8\nsearch localdomain",
 			want:    []string{"1.1.1.1", "8.8.8.8"},
-			wantErr: false,
 		},
 		{
 			name:    "ipv6 servers",
 			content: "nameserver 2606:4700:4700::1111\nnameserver 2001:4860:4860::8888",
 			want:    []string{"2606:4700:4700::1111", "2001:4860:4860::8888"},
-			wantErr: false,
+		},
+		{
+			name:    "inline hash and semicolon comments",
+			content: "nameserver 1.1.1.1 # Cloudflare\nnameserver 8.8.8.8 ; Google\n; nameserver 9.9.9.9\n# nameserver 4.2.2.1\n",
+			want:    []string{"1.1.1.1", "8.8.8.8"},
 		},
 		{
 			name:    "mixed valid and invalid",
 			content: "#nameserver 1.1.1.1\nnameserver 9.9.9.9\nnameserver invalid-ip",
-			want:    []string{"9.9.9.9"}, // Only valid IPs are parsed
-			wantErr: false,
+			want:    []string{"9.9.9.9"},
 		},
 		{
-			name:        "no nameserver lines",
-			content:     "search localdomain\noptions timeout:1",
-			want:        nil,
-			wantErr:     true,
-			errContains: "no nameservers found",
+			name:    "no nameserver lines",
+			content: "search localdomain\noptions timeout:1",
+			want:    nil,
 		},
 		{
-			name:        "empty file",
-			content:     "",
-			want:        nil,
-			wantErr:     true,
-			errContains: "no nameservers found",
+			name:    "empty file",
+			content: "",
+			want:    nil,
 		},
 	}
-
-	// Temporarily override the resolvConfPath constant used in the original code.
-	// Since the original constant is local to getSystemDNSServers, we just need
-	// the path to our temporary file for the simulation logic below.
-	// The 'originalPath' variable below is just to satisfy the 'use' check.
-	originalPath := "/etc/resolv.conf" // Define a dummy original path for the test context
-	// Let's assume for the test it uses a variable path for demonstration.
-	// If not, this test will fail unless run with privileges to modify /etc/resolv.conf (NOT RECOMMENDED).
-
-	// --- Alternative: Mocking os.Open (Requires interface or monkey patching) ---
-	// This is complex. For now, we proceed assuming we can control the path or content.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := os.WriteFile(resolvPath, []byte(tt.content), 0644)
+			got, err := parseResolvConf(strings.NewReader(tt.content))
 			if err != nil {
-				t.Fatalf("Failed to write temp resolv.conf: %v", err)
+				t.Fatalf("parseResolvConf() unexpected error: %v", err)
 			}
-
-			// *** This is the problematic part if the path is hardcoded ***
-			// Assuming getSystemDNSServers can be tested by reading a specific file path
-			// or that we can temporarily replace the function (less ideal).
-			// For this example, let's simulate by calling a helper if it existed.
-
-			// Since we can't easily mock os.Open or change the hardcoded path without
-			// significant refactoring or external libraries, we'll test the logic
-			// conceptually based on the regex test and LoadConfig integration.
-			// A more robust test would involve interfaces for file reading.
-
-			// --- Simplified Check (assuming regex works) ---
-			// This part simulates what would happen *if* the file was read correctly.
-			var simulatedGot []string
-			scanner := bufio.NewScanner(strings.NewReader(tt.content))
-			for scanner.Scan() {
-				match := resolvConfNameserverRegex.FindStringSubmatch(scanner.Text())
-				if len(match) == 2 {
-					ip := net.ParseIP(match[1])
-					if ip != nil {
-						simulatedGot = append(simulatedGot, match[1])
-					}
-				}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseResolvConf() = %v, want %v", got, tt.want)
 			}
-			simulatedErr := scanner.Err()
-			simulatedWantErr := tt.wantErr
-			if len(simulatedGot) == 0 && !tt.wantErr && simulatedErr == nil {
-				// If we expect success but got no servers, it's an error condition
-				simulatedWantErr = true
-			}
-
-			// Note: simulatedWantErr vs tt.wantErr comparison is informational only.
-			// This simulation tests content parsing, not file opening.
-			_ = simulatedWantErr // Mark as intentionally unused for linting
-			if !reflect.DeepEqual(simulatedGot, tt.want) {
-				t.Errorf("getSystemDNSServers() simulated got = %v, want %v", simulatedGot, tt.want)
-			}
-
-			// Clean up the temporary file
-			_ = os.Remove(resolvPath)
 		})
 	}
-	_ = originalPath // Use originalPath to avoid unused variable error
+}
+
+func TestProtocolTypeLabel(t *testing.T) {
+	tests := []struct {
+		proto ProtocolType
+		want  string
+	}{
+		{UDP, "UDP"},
+		{TCP, "TCP"},
+		{DOT, "DoT"},
+		{DOH, "DoH"},
+		{DOQ, "DoQ"},
+		{ProtocolType("custom"), "custom"},
+	}
+	for _, tt := range tests {
+		if got := tt.proto.Label(); got != tt.want {
+			t.Errorf("ProtocolType(%q).Label() = %q, want %q", tt.proto, got, tt.want)
+		}
+	}
 }
 
 // TODO: Add tests for LoadConfig itself, mocking file reads and flag parsing.
@@ -924,6 +875,10 @@ func TestPrintVerboseConfig(t *testing.T) {
 
 	cfg := &Config{
 		ServersFile:         "servers.txt",
+		Preset:              "general",
+		Profiles:            "cloudflare-standard",
+		Transports:          "udp,doh",
+		IPFamily:            "ipv4",
 		Servers:             []ServerInfo{{Address: "1.1.1.1:53", Protocol: UDP}},
 		NumQueries:          10,
 		Timeout:             5 * 1000000000, // 5 seconds
@@ -931,9 +886,11 @@ func TestPrintVerboseConfig(t *testing.T) {
 		RateLimit:           50,
 		QueryType:           "A",
 		Domain:              "example.com",
+		CheckFiltering:      true,
 		CheckDNSSEC:         true,
 		CheckNXDOMAIN:       true,
 		CheckRebinding:      true,
+		RebindingDomain:     "private.example.net",
 		CheckDotcom:         true,
 		AccuracyCheckFile:   "accuracy.txt",
 		AccuracyCheckDomain: "test.local.",
@@ -966,6 +923,24 @@ func TestPrintVerboseConfig(t *testing.T) {
 	}
 	if !strings.Contains(output, "Check DNSSEC:") {
 		t.Error("Expected DNSSEC check info in output")
+	}
+	if !strings.Contains(output, "Preset:            general") {
+		t.Error("Expected preset info in output")
+	}
+	if !strings.Contains(output, "Profiles:          cloudflare-standard") {
+		t.Error("Expected profiles info in output")
+	}
+	if !strings.Contains(output, "Transports:        udp,doh") {
+		t.Error("Expected transports info in output")
+	}
+	if !strings.Contains(output, "IP Family:         ipv4") {
+		t.Error("Expected IP family info in output")
+	}
+	if !strings.Contains(output, "Check Filtering:   true") {
+		t.Error("Expected filtering check info in output")
+	}
+	if !strings.Contains(output, "Rebinding Domain:  private.example.net") {
+		t.Error("Expected rebinding domain info in output")
 	}
 	if !strings.Contains(output, "Accuracy Check:    Enabled") {
 		t.Error("Expected accuracy check enabled info in output")

@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/taihen/dns-benchmark/pkg/catalog"
 )
 
 func TestCalculateAverage(t *testing.T) {
@@ -379,5 +381,82 @@ func TestQueryTypeString(t *testing.T) {
 		if got := tt.input.String(); got != tt.want {
 			t.Errorf("QueryType(%d).String() = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestBenchmarkResults_Analyze(t *testing.T) {
+	br := NewBenchmarkResults()
+	if br == nil || br.Results == nil {
+		t.Fatal("NewBenchmarkResults() returned nil map")
+	}
+	br.Results["a"] = &ServerResult{
+		TotalQueries:      2,
+		CachedLatencies:   []time.Duration{10 * time.Millisecond},
+		UncachedLatencies: []time.Duration{20 * time.Millisecond},
+	}
+	br.Results["b"] = &ServerResult{TotalQueries: 2}
+
+	br.Analyze()
+
+	if math.Abs(br.Results["a"].Reliability-100.0) > 0.01 {
+		t.Errorf("server a Reliability = %v, want 100.0", br.Results["a"].Reliability)
+	}
+	if math.IsInf(br.Results["a"].Score, 1) {
+		t.Errorf("server a Score = +Inf, want finite score")
+	}
+	if !math.IsInf(br.Results["b"].Score, 1) {
+		t.Errorf("server b Score = %v, want +Inf", br.Results["b"].Score)
+	}
+}
+
+func TestStateFromBool(t *testing.T) {
+	tVal, fVal := true, false
+	tests := []struct {
+		name   string
+		value  *bool
+		invert bool
+		want   CheckState
+	}{
+		{"nil value", nil, false, Inconclusive},
+		{"nil value inverted", nil, true, Inconclusive},
+		{"true not inverted", &tVal, false, Pass},
+		{"false not inverted", &fVal, false, Fail},
+		{"true inverted", &tVal, true, Fail},
+		{"false inverted", &fVal, true, Pass},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StateFromBool(tt.value, tt.invert); got != tt.want {
+				t.Errorf("StateFromBool() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServerResult_Groups(t *testing.T) {
+	uncatalogued := &ServerResult{Protocol: "UDP"}
+	if got := uncatalogued.ComparisonGroup(); got != "" {
+		t.Errorf("uncatalogued ComparisonGroup() = %q, want empty", got)
+	}
+	if got := uncatalogued.RankingGroup(); got != "UDP / auto" {
+		t.Errorf("uncatalogued RankingGroup() = %q, want %q", got, "UDP / auto")
+	}
+
+	catalogued := &ServerResult{
+		Protocol: "DoH",
+		Metadata: catalog.Metadata{
+			CatalogVersion:  "2026-11-03.1",
+			FilteringPolicy: "malware",
+			Roles:           []string{"security", "family"},
+			ECS:             "disabled",
+			IPFamily:        "ipv6",
+		},
+	}
+	wantComparison := "malware / security+family / disabled / DoH / ipv6"
+	if got := catalogued.ComparisonGroup(); got != wantComparison {
+		t.Errorf("catalogued ComparisonGroup() = %q, want %q", got, wantComparison)
+	}
+	if got := catalogued.RankingGroup(); got != "DoH / ipv6" {
+		t.Errorf("catalogued RankingGroup() = %q, want %q", got, "DoH / ipv6")
 	}
 }

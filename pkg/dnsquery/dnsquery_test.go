@@ -1350,15 +1350,13 @@ func TestQuicConnectionPool(t *testing.T) {
 	}
 
 	t.Run("connection pool basic operations", func(t *testing.T) {
-		serverAddr := "test.example.com:853"
-
 		// Test that connections are properly tracked
 		testPool.mu.Lock()
 		assert.Empty(t, testPool.connections)
 		testPool.mu.Unlock()
 
 		// Test returnConnection with non-existent connection
-		testPool.returnConnection(serverAddr, nil)
+		testPool.returnConnection(nil)
 
 		// Verify still empty after invalid return
 		testPool.mu.Lock()
@@ -1494,4 +1492,101 @@ func keyedCheckMock(t *testing.T, results map[string]map[string]QueryResult, reb
 		}
 		return QueryResult{Error: fmt.Errorf("mock: unexpected %s query %s for %s", kind, domain, serverInfo.String())}
 	}
+}
+
+type stubExchanger func(context.Context, *dns.Msg, string) (*dns.Msg, time.Duration, error)
+
+func (f stubExchanger) ExchangeContext(ctx context.Context, m *dns.Msg, addr string) (*dns.Msg, time.Duration, error) {
+	return f(ctx, m, addr)
+}
+
+type timeoutNetError struct{ msg string }
+
+func (e timeoutNetError) Error() string   { return e.msg }
+func (e timeoutNetError) Timeout() bool   { return true }
+func (e timeoutNetError) Temporary() bool { return true }
+
+func TestValidateResponseMatchesQuery_CaseInsensitiveAndMismatch(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("Example.COM.", dns.TypeA)
+
+	t.Run("accepts lowercased question name", func(t *testing.T) {
+		resp := new(dns.Msg)
+		resp.SetReply(query)
+		resp.Question[0].Name = "example.com."
+		assert.NoError(t, validateResponseMatchesQuery(query, resp))
+	})
+
+	t.Run("accepts 0x20 mixed-case question name", func(t *testing.T) {
+		resp := new(dns.Msg)
+		resp.SetReply(query)
+		resp.Question[0].Name = "eXaMpLe.CoM."
+		assert.NoError(t, validateResponseMatchesQuery(query, resp))
+	})
+
+	t.Run("rejects different qtype", func(t *testing.T) {
+		resp := new(dns.Msg)
+		resp.SetReply(query)
+		resp.Question[0].Qtype = dns.TypeAAAA
+		assert.ErrorContains(t, validateResponseMatchesQuery(query, resp), "dns question mismatch")
+	})
+
+	t.Run("rejects different qclass", func(t *testing.T) {
+		resp := new(dns.Msg)
+		resp.SetReply(query)
+		resp.Question[0].Qclass = dns.ClassCHAOS
+		assert.ErrorContains(t, validateResponseMatchesQuery(query, resp), "dns question mismatch")
+	})
+
+	t.Run("rejects different name", func(t *testing.T) {
+		resp := new(dns.Msg)
+		resp.SetReply(query)
+		resp.Question[0].Name = "other.com."
+		assert.ErrorContains(t, validateResponseMatchesQuery(query, resp), "dns question mismatch")
+	})
+}
+
+func TestPerformQueryWithClient_WrappedTimeoutsAndCaseInsensitive(t *testing.T) {
+	t.Run("wrapped net.Error timeout preserves chain", func(t *testing.T) {
+		wrapped := fmt.Errorf("dial udp: %w", timeoutNetError{msg: "i/o timeout"})
+		client := stubExchanger(func(_ context.Context, _ *dns.Msg, _ string) (*dns.Msg, time.Duration, error) {
+			return nil, 0, wrapped
+		})
+		res := performQueryWithClient(context.Background(), client, "1.1.1.1:53", "example.com", dns.TypeA, time.Second)
+		require.Error(t, res.Error)
+		assert.Contains(t, res.Error.Error(), "query timed out")
+		assert.ErrorIs(t, res.Error, wrapped)
+		assert.Equal(t, OutcomeTimeout, classifyQueryResult(res))
+	})
+
+	t.Run("context.DeadlineExceeded classified as timeout", func(t *testing.T) {
+		client := stubExchanger(func(_ context.Context, _ *dns.Msg, _ string) (*dns.Msg, time.Duration, error) {
+			return nil, 0, context.DeadlineExceeded
+		})
+		res := performQueryWithClient(context.Background(), client, "1.1.1.1:53", "example.com", dns.TypeA, time.Second)
+		require.Error(t, res.Error)
+		assert.ErrorIs(t, res.Error, context.DeadlineExceeded)
+		assert.Equal(t, OutcomeTimeout, classifyQueryResult(res))
+	})
+
+	t.Run("nil response classified as malformed", func(t *testing.T) {
+		client := stubExchanger(func(_ context.Context, _ *dns.Msg, _ string) (*dns.Msg, time.Duration, error) {
+			return nil, time.Millisecond, nil
+		})
+		res := performQueryWithClient(context.Background(), client, "1.1.1.1:53", "example.com", dns.TypeA, time.Second)
+		require.Error(t, res.Error)
+		assert.Equal(t, OutcomeMalformed, classifyQueryResult(res))
+	})
+
+	t.Run("mixed-case query with lowercased response succeeds", func(t *testing.T) {
+		client := stubExchanger(func(_ context.Context, m *dns.Msg, _ string) (*dns.Msg, time.Duration, error) {
+			resp := new(dns.Msg)
+			resp.SetReply(m)
+			resp.Question[0].Name = strings.ToLower(m.Question[0].Name)
+			return resp, time.Millisecond, nil
+		})
+		res := performQueryWithClient(context.Background(), client, "1.1.1.1:53", "Example.COM", dns.TypeA, time.Second)
+		require.NoError(t, res.Error)
+		assert.Equal(t, OutcomeSuccess, classifyQueryResult(res))
+	})
 }

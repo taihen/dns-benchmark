@@ -1287,3 +1287,85 @@ func TestFindBestServerSkipsUnsentDotcomProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestNonFiniteScoresHandledSafely(t *testing.T) {
+	results := analysis.NewBenchmarkResults()
+	results.Results["nan"] = &analysis.ServerResult{ServerAddress: "1.1.1.1:53", Protocol: "UDP", Score: math.NaN()}
+	results.Results["neginf"] = &analysis.ServerResult{ServerAddress: "2.2.2.2:53", Protocol: "UDP", Score: math.Inf(-1)}
+	results.Results["posinf"] = &analysis.ServerResult{ServerAddress: "3.3.3.3:53", Protocol: "UDP", Score: math.Inf(1)}
+	results.Results["finite"] = &analysis.ServerResult{ServerAddress: "4.4.4.4:53", Protocol: "UDP", Score: 15.0}
+
+	cfg := &config.Config{}
+
+	// JSON encoding must succeed with null scores for non-finite values, finite first,
+	// and deterministic address tie-breaking among unrankable servers.
+	var jsonBuf bytes.Buffer
+	require.NoError(t, WriteJSONResults(&jsonBuf, results, cfg))
+	var report struct {
+		Results []struct {
+			ServerAddress string   `json:"serverAddress"`
+			Score         *float64 `json:"score"`
+		} `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBuf.Bytes(), &report))
+	require.Len(t, report.Results, 4)
+	assert.Equal(t, "4.4.4.4:53", report.Results[0].ServerAddress)
+	require.NotNil(t, report.Results[0].Score)
+	assert.InDelta(t, 15.0, *report.Results[0].Score, 1e-9)
+	assert.Equal(t, []string{"1.1.1.1:53", "2.2.2.2:53", "3.3.3.3:53"}, []string{
+		report.Results[1].ServerAddress,
+		report.Results[2].ServerAddress,
+		report.Results[3].ServerAddress,
+	})
+	for i := 1; i < 4; i++ {
+		assert.Nil(t, report.Results[i].Score, "non-finite score at index %d must serialize as null", i)
+	}
+
+	// CSV must emit empty Score(ms) cells for non-finite scores.
+	var csvBuf bytes.Buffer
+	require.NoError(t, WriteCSVResults(&csvBuf, results, cfg))
+	records, err := csv.NewReader(&csvBuf).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 5)
+	scoreCol := -1
+	for i, h := range records[0] {
+		if h == "Score(ms)" {
+			scoreCol = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, scoreCol)
+	assert.Equal(t, "15.000", records[1][scoreCol])
+	for row := 2; row < 5; row++ {
+		assert.Equal(t, "", records[row][scoreCol], "row %d non-finite score should be empty", row)
+	}
+
+	// Console must display N/A (never NaN or Inf) and recommend the finite server.
+	var consoleBuf bytes.Buffer
+	require.NoError(t, PrintConsoleResults(&consoleBuf, results, cfg))
+	consoleOut := consoleBuf.String()
+	assert.Contains(t, consoleOut, "Recommended server: 4.4.4.4:53")
+	assert.NotContains(t, consoleOut, "NaN")
+	assert.NotContains(t, consoleOut, "Inf")
+
+	// findBestServer returns nil when all servers have non-finite scores.
+	assert.Nil(t, findBestServer([]*analysis.ServerResult{
+		{ServerAddress: "nan", Score: math.NaN()},
+		{ServerAddress: "neginf", Score: math.Inf(-1)},
+		{ServerAddress: "posinf", Score: math.Inf(1)},
+	}, cfg))
+}
+
+func TestOutputFunctionsHandleNilResults(t *testing.T) {
+	cfg := &config.Config{}
+	var buf bytes.Buffer
+	assert.NoError(t, PrintConsoleResults(&buf, nil, cfg))
+	buf.Reset()
+	assert.NoError(t, WriteCSVResults(&buf, nil, cfg))
+	buf.Reset()
+	require.NoError(t, WriteJSONResults(&buf, nil, cfg))
+	var report JSONReport
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &report))
+	assert.Equal(t, JSONSchemaVersion, report.SchemaVersion)
+	assert.Empty(t, report.Results)
+}
