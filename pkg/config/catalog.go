@@ -39,25 +39,31 @@ func addressFamily(host string) string {
 
 // LoadServers applies catalogue selection or legacy file input and system DNS.
 func (cfg *Config) LoadServers() error {
+	cfg.Preset = strings.ToLower(strings.TrimSpace(cfg.Preset))
 	if cfg.Preset == "" {
 		cfg.Preset = "legacy"
 	}
+	cfg.IPFamily = strings.ToLower(strings.TrimSpace(cfg.IPFamily))
 	if cfg.IPFamily == "" {
 		cfg.IPFamily = "auto"
 	}
 	if !slices.Contains([]string{"auto", "ipv4", "ipv6"}, cfg.IPFamily) {
 		return fmt.Errorf("unknown IP family %q", cfg.IPFamily)
 	}
+	allTransports := []string{"udp", "tcp", "dot", "doh", "doq"}
 	transports := []string{"udp", "dot", "doh"}
 	if cfg.Preset == "extended" || cfg.Profiles != "" {
-		transports = []string{"udp", "tcp", "dot", "doh", "doq"}
+		transports = allTransports
 	}
 	if cfg.Transports != "" {
-		transports = strings.Split(cfg.Transports, ",")
-		for _, p := range transports {
-			if !slices.Contains([]string{"udp", "tcp", "dot", "doh", "doq"}, p) {
+		rawTransports := strings.Split(cfg.Transports, ",")
+		transports = make([]string, 0, len(rawTransports))
+		for _, p := range rawTransports {
+			norm := strings.ToLower(strings.TrimSpace(p))
+			if !slices.Contains(allTransports, norm) {
 				return fmt.Errorf("unknown transport %q", p)
 			}
+			transports = append(transports, norm)
 		}
 	}
 	cfg.Servers = nil

@@ -99,9 +99,13 @@ func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg 
 		outputResults = append(outputResults, buildJSONResult(res, cfg))
 	}
 
+	var meta analysis.RunMetadata
+	if results != nil {
+		meta = results.Metadata
+	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ") // Pretty print
-	if err := encoder.Encode(JSONReport{SchemaVersion: JSONSchemaVersion, Metadata: results.Metadata, Results: outputResults}); err != nil {
+	if err := encoder.Encode(JSONReport{SchemaVersion: JSONSchemaVersion, Metadata: meta, Results: outputResults}); err != nil {
 		return fmt.Errorf("failed to encode JSON results: %w", err)
 	}
 	return nil
@@ -109,9 +113,18 @@ func WriteJSONResults(writer io.Writer, results *analysis.BenchmarkResults, cfg 
 
 // --- Helper Functions ---
 
+// isRankableScore reports whether score is a finite composite score that can
+// be ranked and serialized to JSON/CSV/console. NaN and +/-Inf are unrankable.
+func isRankableScore(score float64) bool {
+	return !math.IsNaN(score) && !math.IsInf(score, 0)
+}
+
 // getServerResultsSlice extracts the ServerResult slice from the BenchmarkResults map.
 // It converts the map of server results into a slice for easier iteration and sorting.
 func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.ServerResult {
+	if results == nil {
+		return nil
+	}
 	slice := make([]*analysis.ServerResult, 0, len(results.Results))
 	for _, res := range results.Results {
 		slice = append(slice, res)
@@ -122,16 +135,20 @@ func getServerResultsSlice(results *analysis.BenchmarkResults) []*analysis.Serve
 // sortServerResults sorts catalogue results by ranking group (transport and IP
 // family), then by composite Score ascending within each group (lower is
 // better). Endpoints without catalogue metadata keep the original score-only
-// ordering and sort ahead of catalogue groups. Unrankable servers (+Inf) sort
-// last in their group; ties break by ServerAddress, then EndpointID, for
-// deterministic output.
+// ordering and sort ahead of catalogue groups. Unrankable servers (NaN or
+// +/-Inf) sort last in their group; ties break by ServerAddress, then
+// EndpointID, for deterministic output.
 func sortServerResults(results []*analysis.ServerResult) {
 	sort.SliceStable(results, func(i, j int) bool {
 		if gi, gj := sortGroup(results[i]), sortGroup(results[j]); gi != gj {
 			return gi < gj
 		}
 		si, sj := results[i].Score, results[j].Score
-		if si != sj {
+		ri, rj := isRankableScore(si), isRankableScore(sj)
+		if ri != rj {
+			return ri
+		}
+		if ri && si != sj {
 			return si < sj
 		}
 		if results[i].ServerAddress != results[j].ServerAddress {
@@ -363,7 +380,7 @@ func buildJSONResult(res *analysis.ServerResult, cfg *config.Config) JSONServerR
 		dotcomMs := float64(res.DotcomLatency.Microseconds()) / 1000.0
 		jsonRes.DotcomLatencyMs = &dotcomMs
 	}
-	if !math.IsInf(res.Score, 1) {
+	if isRankableScore(res.Score) {
 		score := res.Score
 		jsonRes.Score = &score
 	}
@@ -439,7 +456,7 @@ func findBestServer(results []*analysis.ServerResult, cfg *config.Config) *analy
 		if cfg.CheckDotcom && res.DotcomLatency == nil {
 			continue // .com gate: skip failed/inconclusive
 		}
-		if math.IsInf(res.Score, 1) {
+		if !isRankableScore(res.Score) {
 			continue // unrankable
 		}
 		if bestServer == nil || res.Score < bestServer.Score {
@@ -554,20 +571,20 @@ func formatStdDev(stdDev time.Duration, hasEnoughData bool) string {
 }
 
 // formatScoreCSV formats a composite score for CSV output.
-// It returns an empty cell for an unrankable (+Inf) score, otherwise the score
-// in milliseconds with three decimal places.
+// It returns an empty cell for an unrankable (NaN or +/-Inf) score, otherwise
+// the score in milliseconds with three decimal places.
 func formatScoreCSV(score float64) string {
-	if math.IsInf(score, 1) {
+	if !isRankableScore(score) {
 		return ""
 	}
 	return fmt.Sprintf("%.3f", score)
 }
 
 // formatScore formats a composite score for console output.
-// It returns "N/A" for an unrankable (+Inf) score, otherwise the score in
-// milliseconds with one decimal place.
+// It returns "N/A" for an unrankable (NaN or +/-Inf) score, otherwise the score
+// in milliseconds with one decimal place.
 func formatScore(score float64) string {
-	if math.IsInf(score, 1) {
+	if !isRankableScore(score) {
 		return "N/A"
 	}
 	return fmt.Sprintf("%.1f ms", score)
@@ -773,6 +790,9 @@ func sortedKeys(groups map[string][]*analysis.ServerResult) []string {
 }
 
 func catalogVersion(results *analysis.BenchmarkResults) string {
+	if results == nil {
+		return ""
+	}
 	for _, r := range results.Results {
 		if r.CatalogVersion != "" {
 			return r.CatalogVersion

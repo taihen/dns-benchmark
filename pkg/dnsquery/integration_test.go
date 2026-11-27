@@ -546,6 +546,7 @@ func TestLocalDoQResponseValidation(t *testing.T) {
 		{"wrong ID", mutated(func(m *dns.Msg) { m.Id = 1 }), "ID mismatch"},
 		{"wrong question", mutated(func(m *dns.Msg) { m.Question[0].Name = "spoofed.test." }), "dns question mismatch"},
 		{"undecodable reply", func(*dns.Msg) ([]byte, error) { return []byte{0x00, 0x01, 0x02}, nil }, "failed to unpack DoQ response"},
+		{"zero-length reply", func(*dns.Msg) ([]byte, error) { return []byte{}, nil }, "doq response length is zero"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -558,8 +559,50 @@ func TestLocalDoQResponseValidation(t *testing.T) {
 
 			require.Error(t, result.Error)
 			assert.ErrorContains(t, result.Error, tt.wantErr)
+			assert.Equal(t, OutcomeMalformed, classifyQueryResult(result))
 		})
 	}
+}
+
+func TestDoQReturnConnectionEvictsClosedSession(t *testing.T) {
+	address, roots := startDoQFixture(t)
+	pool := newQuicConnectionPool()
+	defer pool.shutdownPool()
+	tlsCfg := &tls.Config{
+		NextProtos: []string{"doq"},
+		ServerName: "resolver.fixture",
+		RootCAs:    roots,
+		MinVersion: tls.VersionTLS13,
+	}
+	key := address + "|resolver.fixture"
+
+	session, pooled, err := pool.getConnection(context.Background(), address, tlsCfg, 2*time.Second)
+	require.NoError(t, err)
+	require.True(t, pooled)
+
+	// Simulate two concurrent streams on the same session.
+	s2, pooled2, err := pool.getConnection(context.Background(), address, tlsCfg, 2*time.Second)
+	require.NoError(t, err)
+	require.True(t, pooled2)
+	require.Same(t, session, s2)
+
+	// Close the underlying session while both streams are in flight.
+	require.NoError(t, session.CloseWithError(0, "test close"))
+	<-session.Context().Done()
+
+	// Returning the first stream must keep the entry until streams hits 0.
+	pool.returnConnection(session)
+	pool.mu.Lock()
+	require.Len(t, pool.connections[key], 1)
+	assert.Equal(t, 1, pool.connections[key][0].streams)
+	pool.mu.Unlock()
+
+	// Returning the last stream must evict the closed session and delete the empty key.
+	pool.returnConnection(session)
+	pool.mu.Lock()
+	_, exists := pool.connections[key]
+	pool.mu.Unlock()
+	assert.False(t, exists, "closed session should be evicted when its final stream finishes")
 }
 
 // TestDoQForcedFamilyPinsResolvedAddress checks that a DoQ hostname with a

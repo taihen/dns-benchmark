@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -250,19 +251,35 @@ func LoadConfig() *Config {
 
 // validate rejects flag values that would otherwise only fail, or silently
 // change meaning, after the benchmark has run: an unknown output format, an
-// unknown query type, a non-positive timeout, or a check that cannot produce
-// a conclusive result.
+// unknown query type, a non-positive timeout, invalid numeric limits, an
+// invalid latency domain, or a check that cannot produce a conclusive result.
 func (cfg *Config) validate() error {
 	if cfg.Timeout <= 0 {
 		return fmt.Errorf("-t must be a positive duration such as 5s, got %s", cfg.Timeout)
+	}
+	if cfg.NumQueries < 0 {
+		return fmt.Errorf("-n must be non-negative, got %d", cfg.NumQueries)
+	}
+	if cfg.Concurrency < 1 {
+		return fmt.Errorf("-c must be at least 1, got %d", cfg.Concurrency)
+	}
+	if cfg.RateLimit < 0 {
+		return fmt.Errorf("-rate must be non-negative (0 for unlimited), got %d", cfg.RateLimit)
 	}
 	switch strings.ToLower(cfg.OutputFormat) {
 	case "console", "csv", "json":
 	default:
 		return fmt.Errorf("unknown output format %q; use console, csv or json", cfg.OutputFormat)
 	}
-	if _, ok := dns.StringToType[strings.ToUpper(cfg.QueryType)]; !ok {
+	if qType, ok := dns.StringToType[strings.ToUpper(cfg.QueryType)]; !ok || qType == dns.TypeNone {
 		return fmt.Errorf("unknown -type %q; use a DNS record type such as A, AAAA, MX or TXT", cfg.QueryType)
+	}
+	if cfg.NumQueries > 0 {
+		cfg.Domain = strings.TrimSpace(cfg.Domain)
+		domain := strings.TrimSuffix(cfg.Domain, ".")
+		if !isValidHostname(domain) {
+			return fmt.Errorf("invalid -domain %q", cfg.Domain)
+		}
 	}
 	if cfg.CheckRebinding && strings.TrimSpace(cfg.RebindingDomain) == "" {
 		return fmt.Errorf("-rebinding requires -rebinding-domain=<controlled name with private A and/or AAAA records>")
@@ -274,6 +291,14 @@ func (cfg *Config) validate() error {
 func printVerboseConfig(cfg *Config) {
 	fmt.Fprintln(os.Stderr, "--- Configuration ---")
 	fmt.Fprintf(os.Stderr, "Servers File:      %s\n", cfg.ServersFile)
+	fmt.Fprintf(os.Stderr, "Preset:            %s\n", cfg.Preset)
+	if cfg.Profiles != "" {
+		fmt.Fprintf(os.Stderr, "Profiles:          %s\n", cfg.Profiles)
+	}
+	if cfg.Transports != "" {
+		fmt.Fprintf(os.Stderr, "Transports:        %s\n", cfg.Transports)
+	}
+	fmt.Fprintf(os.Stderr, "IP Family:         %s\n", cfg.IPFamily)
 	fmt.Fprintf(os.Stderr, "Servers Processed: %v\n", cfg.Servers)
 	fmt.Fprintf(os.Stderr, "Num Queries:       %d\n", cfg.NumQueries)
 	fmt.Fprintf(os.Stderr, "Timeout:           %v\n", cfg.Timeout)
@@ -281,9 +306,13 @@ func printVerboseConfig(cfg *Config) {
 	fmt.Fprintf(os.Stderr, "Rate Limit:        %d qps\n", cfg.RateLimit)
 	fmt.Fprintf(os.Stderr, "Query Type:        %s\n", cfg.QueryType)
 	fmt.Fprintf(os.Stderr, "Cached Domain:     %s\n", cfg.Domain)
+	fmt.Fprintf(os.Stderr, "Check Filtering:   %t\n", cfg.CheckFiltering)
 	fmt.Fprintf(os.Stderr, "Check DNSSEC:      %t\n", cfg.CheckDNSSEC)
 	fmt.Fprintf(os.Stderr, "Check NXDOMAIN:    %t\n", cfg.CheckNXDOMAIN)
 	fmt.Fprintf(os.Stderr, "Check Rebinding:   %t\n", cfg.CheckRebinding)
+	if cfg.RebindingDomain != "" {
+		fmt.Fprintf(os.Stderr, "Rebinding Domain:  %s\n", cfg.RebindingDomain)
+	}
 	fmt.Fprintf(os.Stderr, "Check Dotcom:      %t\n", cfg.CheckDotcom)
 	if cfg.AccuracyCheckFile != "" {
 		fmt.Fprintf(os.Stderr,
@@ -520,22 +549,35 @@ func getSystemDNSServers() ([]string, error) {
 	}
 	defer func() { _ = file.Close() }()
 
+	servers, err := parseResolvConf(file)
+	if err != nil {
+		return nil, fmt.Errorf("error reading %s: %w", resolvConfPath, err)
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no nameservers found in %s", resolvConfPath)
+	}
+	return servers, nil
+}
+
+// parseResolvConf extracts valid nameserver IP addresses from a resolv.conf reader.
+// Per resolv.conf(5), comments start with '#' or ';' and extend to the end of the line.
+func parseResolvConf(r io.Reader) ([]string, error) {
 	var servers []string
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		match := resolvConfNameserverRegex.FindStringSubmatch(scanner.Text())
+		line := scanner.Text()
+		if idx := strings.IndexAny(line, "#;"); idx >= 0 {
+			line = line[:idx]
+		}
+		match := resolvConfNameserverRegex.FindStringSubmatch(line)
 		if len(match) == 2 {
-			ip := net.ParseIP(match[1])
-			if ip != nil {
+			if ip := net.ParseIP(match[1]); ip != nil {
 				servers = append(servers, match[1])
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading %s: %w", resolvConfPath, err)
-	}
-	if len(servers) == 0 {
-		return nil, fmt.Errorf("no nameservers found in %s", resolvConfPath)
+		return nil, err
 	}
 	return servers, nil
 }

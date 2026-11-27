@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,6 +203,12 @@ func TestValidate(t *testing.T) {
 		if c.Timeout == 0 {
 			c.Timeout = 5 * time.Second
 		}
+		if c.Concurrency == 0 {
+			c.Concurrency = 5
+		}
+		if c.Domain == "" {
+			c.Domain = "example.com"
+		}
 		return c
 	}
 	tests := []struct {
@@ -219,20 +226,51 @@ func TestValidate(t *testing.T) {
 		{"unknown format", valid(Config{OutputFormat: "jsn"}), "unknown output format"},
 		{"lower-case type", valid(Config{QueryType: "aaaa"}), ""},
 		{"misspelt type", valid(Config{QueryType: "AAA"}), "unknown -type"},
-		{"empty type", Config{OutputFormat: "console", Timeout: time.Second}, "unknown -type"},
-		{"zero timeout", Config{OutputFormat: "console", QueryType: "A"}, "-t must be a positive duration"},
+		{"none type rejected", valid(Config{QueryType: "NONE"}), "unknown -type"},
+		{"empty type", Config{OutputFormat: "console", Timeout: time.Second, Concurrency: 1}, "unknown -type"},
+		{"zero timeout", Config{OutputFormat: "console", QueryType: "A", Concurrency: 1}, "-t must be a positive duration"},
 		{"negative timeout", valid(Config{Timeout: -time.Second}), "-t must be a positive duration"},
+		{"negative num queries", valid(Config{NumQueries: -1}), "-n must be non-negative"},
+		{"zero concurrency", Config{OutputFormat: "console", QueryType: "A", Timeout: time.Second, Concurrency: 0}, "-c must be at least 1"},
+		{"negative concurrency", valid(Config{Concurrency: -2}), "-c must be at least 1"},
+		{"negative rate limit", valid(Config{RateLimit: -10}), "-rate must be non-negative"},
+		{"invalid domain when querying", valid(Config{NumQueries: 5, Domain: "bad domain"}), "invalid -domain"},
+		{"root dot domain rejected when querying", valid(Config{NumQueries: 5, Domain: "."}), "invalid -domain"},
+		{"padded domain with trailing dot accepted", valid(Config{NumQueries: 5, Domain: " example.com. "}), ""},
+		{"empty domain when querying", Config{OutputFormat: "console", QueryType: "A", Timeout: time.Second, Concurrency: 1, NumQueries: 5, Domain: ""}, "invalid -domain"},
+		{"empty domain allowed with zero queries", Config{OutputFormat: "console", QueryType: "A", Timeout: time.Second, Concurrency: 1, NumQueries: 0, Domain: ""}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.validate()
+			cfg := tt.cfg
+			err := cfg.validate()
 			if tt.wantErr != "" {
 				assert.ErrorContains(t, err, tt.wantErr)
 			} else {
 				assert.NoError(t, err)
+				assert.Equal(t, strings.TrimSpace(tt.cfg.Domain), cfg.Domain)
 			}
 		})
 	}
+}
+
+func TestLoadServersNormalizesSelectionFlags(t *testing.T) {
+	cfg := Config{
+		Preset:     " General ",
+		IPFamily:   " IPv4 ",
+		Transports: " UDP, DoH ",
+	}
+	require.NoError(t, cfg.LoadServers())
+	assert.Equal(t, "general", cfg.Preset)
+	assert.Equal(t, "ipv4", cfg.IPFamily)
+	require.NotEmpty(t, cfg.Servers)
+	for _, s := range cfg.Servers {
+		assert.Equal(t, "ipv4", s.IPFamily)
+		assert.Contains(t, []ProtocolType{UDP, DOH}, s.Protocol)
+	}
+
+	bad := Config{Transports: "udp,"}
+	assert.ErrorContains(t, bad.LoadServers(), "unknown transport")
 }
 
 func TestSystemDNSDeduplicatedAgainstCatalogue(t *testing.T) {
