@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: # TEMPORARY: no-publish proof for the migration PR, reverted next commit
 
 permissions:
   contents: write # Needed to create releases and push tags
