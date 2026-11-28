@@ -1,45 +1,22 @@
 name: Test
 
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
 permissions:
   contents: read
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-          fetch-depth: 0 # Get full history for version calculation
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Verify go.mod and go.sum are tidy
-        run: go mod tidy -diff
-
-      - name: Build
-        run: go build -v ./...
-
-      - name: Verify formatting
-        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test (race detector, includes catalogue validation)
-        run: go test -race -v ./...
+    name: test
+    uses: taihen/.github/.github/workflows/go-ci.yml@v1
+    with:
+      # Same steps as before the migration: tidy check, build, gofmt, vet and
+      # `go test -race -v ./...` (includes catalogue validation), so every
+      # boolean stays at its default. The checkout no longer fetches full
+      # history — no test step used it; release.yml keeps fetch-depth: 0.
+      # Input contract: taihen/.github README; changes/failures: issue there.
+      test-args: "-race -v ./..."
