@@ -11,54 +11,33 @@ permissions:
 jobs:
   release:
     name: Create Release
+    # Write-token path: pinned by SHA, never @v1. See taihen/.github README.
+    uses: taihen/.github/.github/workflows/go-release-semantic.yml@d208b8abb127c84723d456ae30825fe78088a830 # v1.1.0
+    with:
+      runs-on: ubuntu-22.04
+      binary-name: dns-benchmark
+      main-package: ./cmd
+      targets: "linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
+      version-source: git-describe
+      ldflags: "-s -w"
+      tidy-check: true
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    # Same gate as the old inline step: only after semantic-release published.
+    if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read # The tap push goes to taihen/homebrew-tap with HOMEBREW_TAP.
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          # Fetch all history and tags for semantic-release
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Verify go.mod and go.sum are tidy
-        run: go mod tidy -diff
-
-      - name: Build binaries
-        id: build
-        run: |
-          VERSION=$(git describe --tags --always)
-          LDFLAGS="-s -w -X main.version=${VERSION}"
-          mkdir -p dist
-          # Linux builds
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-linux-amd64 ./cmd
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-linux-arm64 ./cmd
-          # Darwin (macOS) builds
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-darwin-amd64 ./cmd
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-darwin-arm64 ./cmd
-          # Windows builds
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-windows-amd64.exe ./cmd
-          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/dns-benchmark-windows-arm64.exe ./cmd
-
-      - name: Create checksums
-        run: |
-          cd dist
-          sha256sum * > checksums.txt
-          cd ..
-
-      - name: Semantic Release
-        id: semantic-release
-        uses: cycjimmy/semantic-release-action@v4
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Configuration is now handled by .releaserc.json
+          persist-credentials: false
 
       - name: Update Homebrew tap
-        if: ${{ steps.semantic-release.outputs.new_release_published == 'true' }}
         env:
-          TAG_NAME: ${{ steps.semantic-release.outputs.new_release_git_tag }}
+          TAG_NAME: ${{ needs.release.outputs.new_release_git_tag }}
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP }}
         run: bash ./scripts/update-homebrew-formula.sh
